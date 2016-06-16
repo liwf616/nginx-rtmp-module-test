@@ -12,9 +12,9 @@
 #include <ngx_core.h>
 #include "ngx_rtmp.h"
 
-
+// 推送到另一方的target信息
 typedef struct {
-    ngx_url_t                       url;
+    ngx_url_t                       url;    //目标的url信息
     ngx_str_t                       app;
     ngx_str_t                       name;
     ngx_str_t                       tc_url;
@@ -40,8 +40,8 @@ struct ngx_rtmp_relay_ctx_s {
     ngx_log_t                       log;
     ngx_rtmp_session_t             *session;
     ngx_rtmp_relay_ctx_t           *publish;
-    ngx_rtmp_relay_ctx_t           *play;
-    ngx_rtmp_relay_ctx_t           *next;
+    ngx_rtmp_relay_ctx_t           *play;           //挂载在某个流上面的player
+    ngx_rtmp_relay_ctx_t           *next;           //链表
 
     ngx_str_t                       app;
     ngx_str_t                       tc_url;

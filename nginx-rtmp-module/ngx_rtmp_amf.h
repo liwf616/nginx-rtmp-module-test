@@ -39,8 +39,8 @@
 
 
 typedef struct {
-    ngx_int_t                           type;
-    ngx_str_t                           name;
+    ngx_int_t                           type;       //上面几种数据类型
+    ngx_str_t                           name;       //app,flashver,tcUrl等
     void                               *data;
     size_t                              len;
 } ngx_rtmp_amf_elt_t;

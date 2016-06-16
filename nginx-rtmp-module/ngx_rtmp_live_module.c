@@ -233,6 +233,9 @@ ngx_rtmp_live_get_stream(ngx_rtmp_session_t *s, u_char *name, int create)
     len = ngx_strlen(name);
     stream = &lacf->streams[ngx_hash_key(name, len) % lacf->nbuckets];
 
+    //遍历哈希链表，从里面取出流名称为name的流，
+    //如果没找到，则会遍历到该哈希键值对应的最后一个指针
+    //如果能找到，则直接返回
     for (; *stream; stream = &(*stream)->next) {
         if (ngx_strcmp(name, (*stream)->name) == 0) {
             return stream;
@@ -243,7 +246,7 @@ ngx_rtmp_live_get_stream(ngx_rtmp_session_t *s, u_char *name, int create)
         return NULL;
     }
 
-    ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
             "live: create stream '%s'", name);
 
     if (lacf->free_streams) {
@@ -292,12 +295,14 @@ ngx_rtmp_live_set_status(ngx_rtmp_session_t *s, ngx_chain_t *control,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
 
-    ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "live: set active=%ui", active);
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+                   "live: name = %s set active=%ui", 
+                   ctx->stream->name, active);
 
     if (ctx->active == active) {
-        ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                       "live: unchanged active=%ui", active);
+        ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+                       "live: name = %s unchanged active=%ui", 
+                       ctx->stream->name, active);
         return;
     }
 
@@ -324,6 +329,7 @@ ngx_rtmp_live_set_status(ngx_rtmp_session_t *s, ngx_chain_t *control,
 
         ctx->stream->active = active;
 
+        //将所有的 player设置为active状态 
         for (pctx = ctx->stream->ctx; pctx; pctx = pctx->next) {
             if (pctx->publishing == 0) {
                 ngx_rtmp_live_set_status(pctx->session, control, status,
@@ -359,7 +365,7 @@ ngx_rtmp_live_set_status(ngx_rtmp_session_t *s, ngx_chain_t *control,
     ctx->cs[1].dropped = 0;
 }
 
-
+// 这个函数一般为player逻辑时调用
 static void
 ngx_rtmp_live_start(ngx_rtmp_session_t *s)
 {
@@ -482,6 +488,9 @@ next:
     return next_stream_eof(s, v);
 }
 
+/* join stream as publisher or subscriber */
+// name: 流的名称
+// publisher: 1为publisher，0为subscriber
 
 static void
 ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
@@ -490,6 +499,9 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
     ngx_rtmp_live_stream_t        **stream;
     ngx_rtmp_live_app_conf_t       *lacf;
 
+    // ngx_rtmp_session_t    *ss;
+    // ngx_rtmp_live_ctx_t   *pctx;
+
     lacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_live_module);
     if (lacf == NULL) {
         return;
@@ -497,8 +509,8 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
     if (ctx && ctx->stream) {
-        ngx_log_debug0(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                       "live: already joined");
+        ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+                       "live: already joined '%s'", name);
         return;
     }
 
@@ -511,16 +523,18 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
 
     ctx->session = s;
 
-    ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                    "live: join '%s'", name);
 
+    // 获取该name对应的stream,通常在publish的时候创建，在播放的时候直接获取就即可
     stream = ngx_rtmp_live_get_stream(s, name, publisher || lacf->idle_streams);
 
+    // 播放端 在拉流的时候，流还没有建立，则结束session
     if (stream == NULL ||
         !(publisher || (*stream)->publishing || lacf->idle_streams))
     {
         ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
-                      "live: stream not found");
+                      "live: name = %s stream not found", name);
 
         ngx_rtmp_send_status(s, "NetStream.Play.StreamNotFound", "error",
                              "No such stream");
@@ -530,6 +544,7 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
         return;
     }
 
+    // 上传端在推流的时候，发现流名称已经被占用，则发送status消息
     if (publisher) {
         if ((*stream)->publishing) {
             ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
@@ -544,10 +559,11 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
         (*stream)->publishing = 1;
     }
 
+    //这个stream对应的是publish时创建的流
     ctx->stream = *stream;
     ctx->publishing = publisher;
+    // 下面两个操作是将新创建的ctx插入stream的ctx链表的头部
     ctx->next = (*stream)->ctx;
-
     (*stream)->ctx = ctx;
 
     if (lacf->buflen) {
@@ -557,6 +573,7 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
     ctx->cs[0].csid = NGX_RTMP_CSID_VIDEO;
     ctx->cs[1].csid = NGX_RTMP_CSID_AUDIO;
 
+    // 作为一个subscriber，会执行
     if (!ctx->publishing && ctx->stream->active) {
         ngx_rtmp_live_start(s);
     }
@@ -587,7 +604,7 @@ ngx_rtmp_live_close_stream(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v)
         goto next;
     }
 
-    ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                    "live: leave '%s'", ctx->stream->name);
 
     if (ctx->stream->publishing && ctx->publishing) {
@@ -605,6 +622,7 @@ ngx_rtmp_live_close_stream(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v)
         ngx_rtmp_live_stop(s);
     }
 
+    // 如果是publisher的话，需要关闭它下面挂载的所有的player
     if (ctx->publishing) {
         ngx_rtmp_send_status(s, "NetStream.Unpublish.Success",
                              "status", "Stop publishing");
@@ -612,8 +630,8 @@ ngx_rtmp_live_close_stream(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v)
             for (pctx = ctx->stream->ctx; pctx; pctx = pctx->next) {
                 if (pctx->publishing == 0) {
                     ss = pctx->session;
-                    ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                                   "live: no publisher");
+                    ngx_log_error(NGX_LOG_INFO, ss->connection->log, 0,
+                                   "live: no publisher %s", ctx->stream->name);
                     ngx_rtmp_finalize_session(ss);
                 }
             }
@@ -702,20 +720,18 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                                    *apkt, *aapkt, *acopkt, *rpkt;
     ngx_rtmp_core_srv_conf_t       *cscf;
     ngx_rtmp_live_app_conf_t       *lacf;
-    ngx_rtmp_session_t             *ss;
+    ngx_rtmp_session_t             *ss;                   //指向某一个peer对应的session
     ngx_rtmp_header_t               ch, lh, clh;
     ngx_int_t                       rc, mandatory, dummy_audio;
-    ngx_uint_t                      prio;
-    ngx_uint_t                      peers;
+    ngx_uint_t                      prio;                 //Frame Type
+    ngx_uint_t                      peers;                //记录订阅的用户数目
     ngx_uint_t                      meta_version;
     ngx_uint_t                      csidx;
     uint32_t                        delta;
     ngx_rtmp_live_chunk_stream_t   *cs;
-#ifdef NGX_DEBUG
-    const char                     *type_s;
+    const char                     *type_s;               //类型
 
     type_s = (h->type == NGX_RTMP_MSG_VIDEO ? "video" : "audio");
-#endif
 
     lacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_live_module);
     if (lacf == NULL) {
@@ -731,9 +747,11 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         return NGX_OK;
     }
 
+    // 
     if (ctx->publishing == 0) {
-        ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                       "live: %s from non-publisher", type_s);
+        ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+                       "live: name = %s, %s from non-publisher", 
+                       ctx->stream->name, type_s);
         return NGX_OK;
     }
 
@@ -741,41 +759,38 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ngx_rtmp_live_start(s);
     }
 
+    // 更新计时器
     if (ctx->idle_evt.timer_set) {
         ngx_add_timer(&ctx->idle_evt, lacf->idle_timeout);
     }
 
-    ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "live: %s packet timestamp=%uD",
-                   type_s, h->timestamp);
-
     s->current_time = h->timestamp;
 
-    peers = 0;
+    peers = 0;            //记录所有的peers数目
     apkt = NULL;
     aapkt = NULL;
     acopkt = NULL;
-    header = NULL;
-    coheader = NULL;
-    meta = NULL;
-    meta_version = 0;
-    mandatory = 0;
+    header = NULL;        //aac_header or avc_header
+    coheader = NULL;      //avc_header or aac_header
+    meta = NULL;          //meta data
+    meta_version = 0;     //meta version
+    mandatory = 0;        
 
     prio = (h->type == NGX_RTMP_MSG_VIDEO ?
             ngx_rtmp_get_video_frame_type(in) : 0);
 
     cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
-
+    // 如果是video，并且不允许video跟audio transmitted on the same RTMP chunk stream
     csidx = !(lacf->interleave || h->type == NGX_RTMP_MSG_VIDEO);
 
     cs  = &ctx->cs[csidx];
 
     ngx_memzero(&ch, sizeof(ch));
 
-    ch.timestamp = h->timestamp;
-    ch.msid = NGX_RTMP_MSID;
-    ch.csid = cs->csid;
-    ch.type = h->type;
+    ch.timestamp = h->timestamp;    //时间戳
+    ch.msid = NGX_RTMP_MSID;        /* message stream id */
+    ch.csid = cs->csid;             /* chunk stream id,video = 0,audio = 1*/
+    ch.type = h->type;              //音视频
 
     lh = ch;
 
@@ -817,6 +832,7 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                 coheader = codec_ctx->avc_header;
             }
 
+            //AAC sequence header
             if (codec_ctx->audio_codec_id == NGX_RTMP_AUDIO_AAC &&
                 ngx_rtmp_is_codec_header(in))
             {
@@ -831,6 +847,7 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                 coheader = codec_ctx->aac_header;
             }
 
+            // AVC sequence header
             if (codec_ctx->video_codec_id == NGX_RTMP_VIDEO_H264 &&
                 ngx_rtmp_is_codec_header(in))
             {
@@ -858,8 +875,9 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         /* send metadata */
 
         if (meta && meta_version != pctx->meta_version) {
-            ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                           "live: meta");
+            ngx_log_error(NGX_LOG_INFO, ss->connection->log, 0,
+                           "live: av name = %s send meta",
+                           ctx->stream->name);
 
             if (ngx_rtmp_send_message(ss, meta, 0) == NGX_OK) {
                 pctx->meta_version = meta_version;
@@ -881,24 +899,27 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         if (!cs->active) {
 
             if (mandatory) {
-                ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                               "live: skipping header");
+                ngx_log_error(NGX_LOG_INFO, ss->connection->log, 0,
+                               "live: av name = %s, skipping header",
+                               ctx->stream->name);
                 continue;
             }
 
             if (lacf->wait_video && h->type == NGX_RTMP_MSG_AUDIO &&
                 !pctx->cs[0].active)
             {
-                ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                               "live: waiting for video");
+                ngx_log_error(NGX_LOG_INFO, ss->connection->log, 0,
+                               "live: av name = %s waiting for video",
+                               ctx->stream->name);
                 continue;
             }
-
+            // 对于video，先从关键帧开始推送
             if (lacf->wait_key && prio != NGX_RTMP_VIDEO_KEY_FRAME &&
                (lacf->interleave || h->type == NGX_RTMP_MSG_VIDEO))
             {
-                ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                               "live: skip non-key");
+                ngx_log_error(NGX_LOG_INFO, ss->connection->log, 0,
+                               "live: av name = %s skip non-key",
+                               ctx->stream->name);
                 continue;
             }
 
@@ -917,9 +938,9 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
                 /* send absolute codec header */
 
-                ngx_log_debug2(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                               "live: abs %s header timestamp=%uD",
-                               type_s, lh.timestamp);
+                ngx_log_error(NGX_LOG_INFO, ss->connection->log, 0,
+                               "live: av name = %s abs %s codec header timestamp=%uD",
+                               ctx->stream->name, type_s, lh.timestamp);
 
                 if (header) {
                     if (apkt == NULL) {
@@ -996,8 +1017,9 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
             cs->dropped += delta;
 
             if (mandatory) {
-                ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                               "live: mandatory packet failed");
+                ngx_log_error(NGX_LOG_INFO, ss->connection->log, 0,
+                               "live: av name = %s mandatory packet failed",
+                               ctx->stream->name);
                 ngx_rtmp_finalize_session(ss);
             }
 
@@ -1033,10 +1055,15 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                               &ctx->stream->bw_in_video,
                               h->mlen);
 
+    // ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+    //        "live: name = %s ,%s packet timestamp = %uD ,pees number = %d, bw_in_bytes = %uD, bw_out_bytes = %uD",
+    //         ctx->stream->name ,type_s, h->timestamp,
+    //         peers, ctx->stream->bw_in.bytes, ctx->stream->bw_out.bytes);
+
     return NGX_OK;
 }
 
-
+// 当一个新的publish流上来之后，首先会调用这个函数
 static ngx_int_t
 ngx_rtmp_live_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 {
@@ -1049,7 +1076,7 @@ ngx_rtmp_live_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
         goto next;
     }
 
-    ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                    "live: publish: name='%s' type='%s'",
                    v->name, v->type);
 
@@ -1086,8 +1113,8 @@ ngx_rtmp_live_play(ngx_rtmp_session_t *s, ngx_rtmp_play_t *v)
         goto next;
     }
 
-    ngx_log_debug4(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "live: play: name='%s' start=%uD duration=%uD reset=%d",
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+                   "live: play name='%s' start=%uD duration=%uD reset=%d",
                    v->name, (uint32_t) v->start,
                    (uint32_t) v->duration, (uint32_t) v->reset);
 

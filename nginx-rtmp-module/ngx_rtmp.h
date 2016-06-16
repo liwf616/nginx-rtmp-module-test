@@ -116,7 +116,7 @@ typedef struct {
 #define NGX_RTMP_DEFAULT_CHUNK_SIZE     128
 
 
-/* RTMP message types */
+/* RTMP message types id */
 #define NGX_RTMP_MSG_CHUNK_SIZE         1
 #define NGX_RTMP_MSG_ABORT              2
 #define NGX_RTMP_MSG_ACK                3
@@ -124,17 +124,20 @@ typedef struct {
 #define NGX_RTMP_MSG_ACK_SIZE           5
 #define NGX_RTMP_MSG_BANDWIDTH          6
 #define NGX_RTMP_MSG_EDGE               7
-#define NGX_RTMP_MSG_AUDIO              8
-#define NGX_RTMP_MSG_VIDEO              9
+#define NGX_RTMP_MSG_AUDIO              8       //Audio Message
+#define NGX_RTMP_MSG_VIDEO              9       //Video Message
 #define NGX_RTMP_MSG_AMF3_META          15
 #define NGX_RTMP_MSG_AMF3_SHARED        16
 #define NGX_RTMP_MSG_AMF3_CMD           17
-#define NGX_RTMP_MSG_AMF_META           18
+#define NGX_RTMP_MSG_AMF_META           18      //Metadata
 #define NGX_RTMP_MSG_AMF_SHARED         19
+
+// connect, createStream, publish, play, pause
 #define NGX_RTMP_MSG_AMF_CMD            20
 #define NGX_RTMP_MSG_AGGREGATE          22
 #define NGX_RTMP_MSG_MAX                22
 
+//cmcf->events 
 #define NGX_RTMP_CONNECT                NGX_RTMP_MSG_MAX + 1
 #define NGX_RTMP_DISCONNECT             NGX_RTMP_MSG_MAX + 2
 #define NGX_RTMP_HANDSHAKE_DONE         NGX_RTMP_MSG_MAX + 3
@@ -159,7 +162,7 @@ typedef struct {
  * + max 4  extended header (timestamp) */
 #define NGX_RTMP_MAX_CHUNK_HEADER       18
 
-
+// Message Header
 typedef struct {
     uint32_t                csid;       /* chunk stream id */
     uint32_t                timestamp;  /* timestamp (delta) */
@@ -194,10 +197,10 @@ typedef struct {
     void                  **ctx;
     void                  **main_conf;
     void                  **srv_conf;
-    void                  **app_conf;
+    void                  **app_conf;       //app_conf
 
     ngx_str_t              *addr_text;
-    int                     connected;
+    int                     connected;      //连接是否被链接成功
 
 #if (nginx_version >= 1007005)
     ngx_queue_t             posted_dry_events;
@@ -215,8 +218,8 @@ typedef struct {
     ngx_str_t               flashver;
     ngx_str_t               swf_url;
     ngx_str_t               tc_url;
-    uint32_t                acodecs;
-    uint32_t                vcodecs;
+    uint32_t                acodecs;        //支持的audio codecs
+    uint32_t                vcodecs;        //支持的audio codecs
     ngx_str_t               page_url;
 
     /* handshake data */
@@ -587,6 +590,14 @@ ngx_int_t ngx_rtmp_send_sample_access(ngx_rtmp_session_t *s);
 #define NGX_RTMP_VIDEO_INTER_FRAME          2
 #define NGX_RTMP_VIDEO_DISPOSABLE_FRAME     3
 
+/*
+Type of video frame. The following values are defined:
+1 = key frame (for AVC, a seekable frame)
+2 = inter frame (for AVC, a non-seekable frame)
+3 = disposable inter frame (H.263 only)
+4 = generated key frame (reserved for server use only)
+5 = video info/command frame
+ */
 
 static ngx_inline ngx_int_t
 ngx_rtmp_get_video_frame_type(ngx_chain_t *in)
@@ -594,6 +605,17 @@ ngx_rtmp_get_video_frame_type(ngx_chain_t *in)
     return (in->buf->pos[0] & 0xf0) >> 4;
 }
 
+/*
+
+The following values are defined:
+0 = AAC sequence header
+1 = AAC raw
+
+The following values are defined:
+0 = AVC sequence header
+1 = AVC NALU
+2 = AVC end of sequence (lower level NALU sequence ender is not required or supported)
+ */
 
 static ngx_inline ngx_int_t
 ngx_rtmp_is_codec_header(ngx_chain_t *in)

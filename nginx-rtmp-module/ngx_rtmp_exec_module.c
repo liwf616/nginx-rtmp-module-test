@@ -33,6 +33,9 @@ static char * ngx_rtmp_exec_merge_app_conf(ngx_conf_t *cf,
        void *parent, void *child);
 /*static char * ngx_rtmp_exec_block(ngx_conf_t *cf, ngx_command_t *cmd,
        void *conf);*/
+
+// 这个函数一般是在解析配置文件的时候使用，他会把所有的Exec指令解析到ngx_rtmp_exec_conf_t中，
+// 最终会被存储到ngx_rtmp_exec_app_conf_t
 static char * ngx_rtmp_exec_conf(ngx_conf_t *cf, ngx_command_t *cmd,
        void *conf);
 static char *ngx_rtmp_exec_kill_signal(ngx_conf_t *cf, ngx_command_t *cmd,
@@ -46,11 +49,10 @@ static char *ngx_rtmp_exec_kill_signal(ngx_conf_t *cf, ngx_command_t *cmd,
 #define NGX_RTMP_EXEC_PUBLISHING        0x01
 #define NGX_RTMP_EXEC_PLAYING           0x02
 
-
+// 所有可以执行的command的枚举类型
 enum {
     NGX_RTMP_EXEC_PUSH,
     NGX_RTMP_EXEC_PULL,
-
     NGX_RTMP_EXEC_PUBLISH,
     NGX_RTMP_EXEC_PUBLISH_DONE,
     NGX_RTMP_EXEC_PLAY,
@@ -62,43 +64,46 @@ enum {
     NGX_RTMP_EXEC_STATIC
 };
 
-
+// exec_pull http://example.com/abc.ts -c copy -f flv rtmp://localhost/$name/$app name=mystream;
+// 这个结构存储的是一个exec命令,比如
 typedef struct {
     ngx_str_t                           id;
     ngx_uint_t                          type;
-    ngx_str_t                           cmd;
-    ngx_array_t                         args;       /* ngx_str_t */
-    ngx_array_t                         names;
+    ngx_str_t                           cmd;        //ffmpeg 
+    ngx_array_t                         args;       /* ngx_str_t  "-i rtmp://localhost/genshuixue/test" */ 
+    ngx_array_t                         names;      //mystream
 } ngx_rtmp_exec_conf_t;
 
-
+// main里面的conf结构
 typedef struct {
-    ngx_rtmp_exec_conf_t               *conf;
-    ngx_log_t                          *log;
-    ngx_rtmp_eval_t                   **eval;
-    void                               *eval_ctx;
-    unsigned                            active:1;
-    unsigned                            managed:1;
-    ngx_pid_t                           pid;
-    ngx_pid_t                          *save_pid;
-    int                                 pipefd;
-    ngx_connection_t                    dummy_conn;  /*needed by ngx_xxx_event*/
-    ngx_event_t                         read_evt, write_evt;
-    ngx_event_t                         respawn_evt;
-    ngx_msec_t                          respawn_timeout;
-    ngx_int_t                           kill_signal;
-} ngx_rtmp_exec_t;
-
-
-typedef struct {
-    ngx_array_t                         static_conf; /* ngx_rtmp_exec_conf_t */
-    ngx_array_t                         static_exec; /* ngx_rtmp_exec_t */
-    ngx_msec_t                          respawn_timeout;
+    ngx_array_t                         static_conf;        // ngx_rtmp_exec_conf_t 与 ngx_rtmp_exec_t 是一一对应的
+    ngx_array_t                         static_exec;        // ngx_rtmp_exec_t 
+    ngx_msec_t                          respawn_timeout;    // sets respawn timeout 
+                                                            // to wait before starting new child instance
     ngx_int_t                           kill_signal;
     ngx_log_t                          *log;
 } ngx_rtmp_exec_main_conf_t;
 
 
+typedef struct {
+    ngx_rtmp_exec_conf_t               *conf;                 //ngx_rtmp_exec_conf_t
+    ngx_log_t                          *log;                  //
+    ngx_rtmp_eval_t                   **eval;
+    void                               *eval_ctx;             //session
+    unsigned                            active:1;
+    unsigned                            managed:1;            //1
+    ngx_pid_t                           pid;
+    ngx_pid_t                          *save_pid;
+    int                                 pipefd;
+    ngx_connection_t                    dummy_conn;           //needed by ngx_xxx_event
+    ngx_event_t                         read_evt, write_evt;
+    ngx_event_t                         respawn_evt;          //重启的时间机制
+    ngx_msec_t                          respawn_timeout;      //重启的超时时间
+    ngx_int_t                           respawn_count;        //重启的次数
+    ngx_int_t                           kill_signal;
+} ngx_rtmp_exec_t;
+
+// 这是一个链表结构，主要给pull结构使用
 typedef struct ngx_rtmp_exec_pull_ctx_s  ngx_rtmp_exec_pull_ctx_t;
 
 struct ngx_rtmp_exec_pull_ctx_s {
@@ -106,32 +111,32 @@ struct ngx_rtmp_exec_pull_ctx_s {
     ngx_uint_t                          counter;
     ngx_str_t                           name;
     ngx_str_t                           app;
-    ngx_array_t                         pull_exec;   /* ngx_rtmp_exec_t */
+    ngx_array_t                         pull_exec;                /* ngx_rtmp_exec_t */
     ngx_rtmp_exec_pull_ctx_t           *next;
 };
 
-
+// app里面的conf结构a
 typedef struct {
     ngx_int_t                           active;
-    ngx_array_t                         conf[NGX_RTMP_EXEC_MAX];
-                                                     /* ngx_rtmp_exec_conf_t */
-    ngx_flag_t                          respawn;
-    ngx_flag_t                          options;
+    ngx_array_t                         conf[NGX_RTMP_EXEC_MAX];  //ngx_rtmp_exec_conf_t，这个结构存储的是所有的exec命令
+    ngx_flag_t                          respawn;                  //重新拉起child 进程
+    ngx_flag_t                          options;                  //exec_options 
     ngx_uint_t                          nbuckets;
+    ngx_int_t                           respawn_count;            //设置重启的最大次数
     ngx_rtmp_exec_pull_ctx_t          **pull;
 } ngx_rtmp_exec_app_conf_t;
 
-
+// 该模块对应的ngx_rtmp_exe_module
 typedef struct {
     ngx_uint_t                          flags;
-    ngx_str_t                           path;     /* /tmp/rec/myfile-123.flv */
-    ngx_str_t                           filename; /* myfile-123.flv */
-    ngx_str_t                           basename; /* myfile-123 */
-    ngx_str_t                           dirname;  /* /tmp/rec */
+    ngx_str_t                           path;                       /* /tmp/rec/myfile-123.flv */
+    ngx_str_t                           filename;                   /* myfile-123.flv */
+    ngx_str_t                           basename;                   /* myfile-123 */
+    ngx_str_t                           dirname;                    /* /tmp/rec */
     ngx_str_t                           recorder;
     u_char                              name[NGX_RTMP_MAX_NAME];
     u_char                              args[NGX_RTMP_MAX_ARGS];
-    ngx_array_t                         push_exec;   /* ngx_rtmp_exec_t */
+    ngx_array_t                         push_exec;                   /* ngx_rtmp_exec_t*/
     ngx_rtmp_exec_pull_ctx_t           *pull;
 } ngx_rtmp_exec_ctx_t;
 
@@ -152,13 +157,13 @@ static ngx_command_t  ngx_rtmp_exec_commands[] = {
       0,
       NULL },
 */
-    { ngx_string("exec"),
-      NGX_RTMP_MAIN_CONF|NGX_RTMP_SRV_CONF|NGX_RTMP_APP_CONF|NGX_CONF_1MORE,
-      ngx_rtmp_exec_conf,
-      NGX_RTMP_APP_CONF_OFFSET,
+    { ngx_string("exec"),                                                       //name
+      NGX_RTMP_MAIN_CONF|NGX_RTMP_SRV_CONF|NGX_RTMP_APP_CONF|NGX_CONF_1MORE,    //type
+      ngx_rtmp_exec_conf,                                                       //函数指针,当nginx在解析配置的时候调用
+      NGX_RTMP_APP_CONF_OFFSET,                                                 //conf
       offsetof(ngx_rtmp_exec_app_conf_t, conf) +
-      NGX_RTMP_EXEC_PUSH * sizeof(ngx_array_t),
-      NULL },
+      NGX_RTMP_EXEC_PUSH * sizeof(ngx_array_t),                                 //offset
+      NULL },                                                                   //post
 
     { ngx_string("exec_push"),
       NGX_RTMP_MAIN_CONF|NGX_RTMP_SRV_CONF|NGX_RTMP_APP_CONF|NGX_CONF_1MORE,
@@ -231,6 +236,13 @@ static ngx_command_t  ngx_rtmp_exec_commands[] = {
       offsetof(ngx_rtmp_exec_app_conf_t, respawn),
       NULL },
 
+    { ngx_string("respawn_count"),
+       NGX_RTMP_MAIN_CONF|NGX_RTMP_SRV_CONF|NGX_RTMP_APP_CONF|NGX_CONF_TAKE1,
+       ngx_conf_set_num_slot,
+       NGX_RTMP_APP_CONF_OFFSET,
+       offsetof(ngx_rtmp_exec_app_conf_t, respawn_count),
+       NULL },
+
     { ngx_string("respawn_timeout"),
       NGX_RTMP_MAIN_CONF|NGX_RTMP_SRV_CONF|NGX_RTMP_APP_CONF|NGX_CONF_TAKE1,
       ngx_conf_set_msec_slot,
@@ -258,7 +270,7 @@ static ngx_command_t  ngx_rtmp_exec_commands[] = {
 
 static ngx_rtmp_module_t  ngx_rtmp_exec_module_ctx = {
     NULL,                                   /* preconfiguration */
-    ngx_rtmp_exec_postconfiguration,        /* postconfiguration */
+    ngx_rtmp_exec_postconfiguration,        /* postconfiguration */ 
     ngx_rtmp_exec_create_main_conf,         /* create main configuration */
     ngx_rtmp_exec_init_main_conf,           /* init main configuration */
     NULL,                                   /* create server configuration */
@@ -407,7 +419,7 @@ static ngx_rtmp_eval_t * ngx_rtmp_exec_event_eval[] = {
     NULL
 };
 
-
+// 创建main conf
 static void *
 ngx_rtmp_exec_create_main_conf(ngx_conf_t *cf)
 {
@@ -430,7 +442,7 @@ ngx_rtmp_exec_create_main_conf(ngx_conf_t *cf)
     return emcf;
 }
 
-
+// 初始化main conf
 static char *
 ngx_rtmp_exec_init_main_conf(ngx_conf_t *cf, void *conf)
 {
@@ -448,7 +460,7 @@ ngx_rtmp_exec_init_main_conf(ngx_conf_t *cf, void *conf)
         emcf->kill_signal = SIGKILL;
     }
 #endif
-
+    // 根据static_conf数组里面的个数，初始化static_exec结构
     if (ngx_array_init(&emcf->static_exec, cf->pool,
                        emcf->static_conf.nelts,
                        sizeof(ngx_rtmp_exec_t)) != NGX_OK)
@@ -489,6 +501,7 @@ ngx_rtmp_exec_create_app_conf(ngx_conf_t *cf)
     }
 
     eacf->respawn = NGX_CONF_UNSET;
+    eacf->respawn_count = NGX_CONF_UNSET;
     eacf->options = NGX_CONF_UNSET;
     eacf->nbuckets = NGX_CONF_UNSET_UINT;
 
@@ -534,6 +547,7 @@ ngx_rtmp_exec_merge_app_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_uint_t  n;
 
     ngx_conf_merge_value(conf->respawn, prev->respawn, 1);
+    ngx_conf_merge_value(conf->respawn_count, prev->respawn_count, 6);
     ngx_conf_merge_uint_value(conf->nbuckets, prev->nbuckets, 1024);
 
     for (n = 0; n < NGX_RTMP_EXEC_MAX; n++) {
@@ -614,15 +628,19 @@ ngx_rtmp_exec_respawn(ngx_event_t *ev)
     ngx_rtmp_exec_run((ngx_rtmp_exec_t *) ev->data);
 }
 
-
+// 这个函数会在子进程死去的时候被执行
 static void
 ngx_rtmp_exec_child_dead(ngx_event_t *ev)
 {
     ngx_connection_t   *dummy_conn = ev->data;
     ngx_rtmp_exec_t    *e;
+    ngx_rtmp_exec_app_conf_t *eacf;
+
+
+    eacf = ngx_rtmp_get_module_app_conf(e->eval_ctx, ngx_rtmp_exec_module);
 
     e = dummy_conn->data;
-
+    
     ngx_log_error(NGX_LOG_INFO, e->log, 0,
                   "exec: child %ui exited; %s", (ngx_int_t) e->pid,
                   e->respawn_timeout == NGX_CONF_UNSET_MSEC ? "respawning" :
@@ -634,14 +652,24 @@ ngx_rtmp_exec_child_dead(ngx_event_t *ev)
         return;
     }
 
+    ngx_int_t respawn_count = 5;
+    if (e->respawn_count >= eacf->respawn_count)
+    {
+        ngx_log_error(NGX_LOG_ERR, e->log, 0,
+                  "exec: child respawn count %ui > %ui", e->respawn_count);
+        return;
+    }
+
+    // （1）如果没有超时时间，则直接执行重启的任务
     if (e->respawn_timeout == 0) {
         ngx_rtmp_exec_run(e);
         return;
     }
 
-    ngx_log_debug1(NGX_LOG_DEBUG_RTMP, e->log, 0,
+    ngx_log_error(NGX_LOG_INFO, e->log, 0,
                    "exec: shedule respawn %Mmsec", e->respawn_timeout);
-
+    
+    // （2）否则的话，需要等time_out的时间才触发重启的任务
     e->respawn_evt.data = e;
     e->respawn_evt.log = e->log;
     e->respawn_evt.handler = ngx_rtmp_exec_respawn;
@@ -649,7 +677,7 @@ ngx_rtmp_exec_child_dead(ngx_event_t *ev)
     ngx_add_timer(&e->respawn_evt, e->respawn_timeout);
 }
 
-
+// 关闭e->pid里面存储的进程ID
 static ngx_int_t
 ngx_rtmp_exec_kill(ngx_rtmp_exec_t *e, ngx_int_t kill_signal)
 {
@@ -689,7 +717,7 @@ ngx_rtmp_exec_kill(ngx_rtmp_exec_t *e, ngx_int_t kill_signal)
     return NGX_OK;
 }
 
-
+// 开启一个新的进程
 static ngx_int_t
 ngx_rtmp_exec_run(ngx_rtmp_exec_t *e)
 {
@@ -701,6 +729,8 @@ ngx_rtmp_exec_run(ngx_rtmp_exec_t *e)
     ngx_rtmp_exec_conf_t   *ec;
 
     ec = e->conf;
+
+    e->respawn_count++; //启动次数＋1
 
     ngx_log_error(NGX_LOG_INFO, e->log, 0,
                   "exec: starting %s child '%V'",
@@ -716,7 +746,7 @@ ngx_rtmp_exec_run(ngx_rtmp_exec_t *e)
                            "exec: already active '%V'", &ec->cmd);
             return NGX_OK;
         }
-
+        // 创建管道
         if (pipe(pipefd) == -1) {
             ngx_log_error(NGX_LOG_INFO, e->log, ngx_errno,
                           "exec: pipe failed");
@@ -880,16 +910,16 @@ ngx_rtmp_exec_run(ngx_rtmp_exec_t *e)
                 }
             }
 
-            ngx_log_debug2(NGX_LOG_DEBUG_RTMP, e->log, 0,
-                           "exec: child '%V' started pid=%i",
-                           &ec->cmd, (ngx_int_t) pid);
+            // ngx_log_error(NGX_LOG_INFO, e->log, 0,
+            //                "exec: child '%V' started pid=%i",
+            //                &ec->cmd, (ngx_int_t) pid);
             break;
     }
 
     return NGX_OK;
 }
 
-
+// 这个函数的主要目的就是把app_conf里面的所有的push配置填充到ngx_rtmp_exec_module对应的context里面
 static ngx_int_t
 ngx_rtmp_exec_init_ctx(ngx_rtmp_session_t *s, u_char name[NGX_RTMP_MAX_NAME],
     u_char args[NGX_RTMP_MAX_ARGS], ngx_uint_t flags)
@@ -922,6 +952,7 @@ ngx_rtmp_exec_init_ctx(ngx_rtmp_session_t *s, u_char name[NGX_RTMP_MAX_NAME],
 
     push_conf = &eacf->conf[NGX_RTMP_EXEC_PUSH];
 
+    // 如果有push_exe的指令
     if (push_conf->nelts > 0) {
 
         if (ngx_array_init(&ctx->push_exec, s->connection->pool,
@@ -949,6 +980,7 @@ ngx_rtmp_exec_init_ctx(ngx_rtmp_session_t *s, u_char name[NGX_RTMP_MAX_NAME],
             e->kill_signal = emcf->kill_signal;
             e->respawn_timeout = (eacf->respawn ? emcf->respawn_timeout :
                                   NGX_CONF_UNSET_MSEC);
+            e->respawn_count = 0;
         }
     }
 
@@ -1115,7 +1147,7 @@ ngx_rtmp_exec_unmanaged(ngx_rtmp_session_t *s, ngx_array_t *e, const char *op)
         return;
     }
 
-    ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                    "exec: %s %uz unmanaged command(s)", op, e->nelts);
 
     ec = e->elts;
@@ -1135,7 +1167,10 @@ ngx_rtmp_exec_unmanaged(ngx_rtmp_session_t *s, ngx_array_t *e, const char *op)
     }
 }
 
-
+// 开始执行创建进程的命令，由publish和play两种事件激活，
+// s: session
+// e: ngx_rtmp_exec_t
+// op: publish or play
 static void
 ngx_rtmp_exec_managed(ngx_rtmp_session_t *s, ngx_array_t *e, const char *op)
 {
@@ -1146,7 +1181,7 @@ ngx_rtmp_exec_managed(ngx_rtmp_session_t *s, ngx_array_t *e, const char *op)
         return;
     }
 
-    ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                    "exec: %s %uz managed command(s)", op, e->nelts);
 
     en = e->elts;
@@ -1157,7 +1192,7 @@ ngx_rtmp_exec_managed(ngx_rtmp_session_t *s, ngx_array_t *e, const char *op)
     }
 }
 
-
+// 这个函数在rtmp流被publish的时候被调用
 static ngx_int_t
 ngx_rtmp_exec_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 {
@@ -1173,17 +1208,19 @@ ngx_rtmp_exec_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
     if (s->auto_pushed) {
         goto next;
     }
-
+    // 
     if (ngx_rtmp_exec_init_ctx(s, v->name, v->args, NGX_RTMP_EXEC_PUBLISHING)
         != NGX_OK)
     {
         goto next;
     }
 
+    // publish对应的exec指令
     ngx_rtmp_exec_unmanaged(s, &eacf->conf[NGX_RTMP_EXEC_PUBLISH], "publish");
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_exec_module);
 
+    // push对应的exec指令
     ngx_rtmp_exec_managed(s, &ctx->push_exec, "push");
 
 next:
@@ -1259,8 +1296,9 @@ ngx_rtmp_exec_close_stream(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v)
 
     ctx->flags = 0;
 
+    // push command
     if (ctx->push_exec.nelts > 0) {
-        ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+        ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                        "exec: delete %uz push command(s)",
                        ctx->push_exec.nelts);
 
@@ -1272,6 +1310,7 @@ ngx_rtmp_exec_close_stream(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v)
 
     pctx = ctx->pull;
 
+    // pull command , 只有在最后一个连接断掉之后，才会把这个exe杀掉
     if (pctx && --pctx->counter == 0) {
         ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                        "exec: delete %uz pull command(s)",
@@ -1361,7 +1400,7 @@ next:
 }
 #endif /* NGX_WIN32 */
 
-
+// 解析配置文件使用
 static char *
 ngx_rtmp_exec_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
@@ -1376,16 +1415,19 @@ ngx_rtmp_exec_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     confs = (ngx_array_t *) (p + cmd->offset);
 
     eacf = ngx_rtmp_conf_get_module_app_conf(cf, ngx_rtmp_exec_module);
-
+    
+    // （1）如果这个数组还没有被初始化，则先初始化，初始化容量大小为1
     if (confs->nalloc == 0 && ngx_array_init(confs, cf->pool, 1,
                                              sizeof(ngx_rtmp_exec_conf_t))
                               != NGX_OK)
     {
         return NGX_CONF_ERROR;
     }
-
+    
+    // args字段是一个ngx_str_t类型的数组
     value = cf->args->elts;
 
+    //（2）在这个数组里面插入一个元素
     ec = ngx_array_push(confs);
     if (ec == NULL) {
         return NGX_CONF_ERROR;
@@ -1396,7 +1438,7 @@ ngx_rtmp_exec_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     /* type is undefined for explicit execs */
 
     ec->type = NGX_CONF_UNSET_UINT;
-    ec->cmd = value[1];
+    ec->cmd = value[1];               //exec_push ffmpeg -i .....
 
     if (ngx_array_init(&ec->names, cf->pool, 1, sizeof(ngx_str_t)) != NGX_OK) {
         return NGX_CONF_ERROR;
@@ -1406,6 +1448,7 @@ ngx_rtmp_exec_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return NGX_CONF_OK;
     }
 
+    //获取ffmpeg后面的参数个数
     nargs = cf->args->nelts - 2;
     if (ngx_array_init(&ec->args, cf->pool, nargs, sizeof(ngx_str_t)) != NGX_OK)
     {
@@ -1585,7 +1628,9 @@ static ngx_int_t
 ngx_rtmp_exec_postconfiguration(ngx_conf_t *cf)
 {
 #if !(NGX_WIN32)
-
+    // 这个地方的意思是：
+    // 将next_publish指向原来的ngx_rtmp_publish
+    // 将全局的ngx_rtmp_publish指向ngx_rtmp_exec_publish
     next_publish = ngx_rtmp_publish;
     ngx_rtmp_publish = ngx_rtmp_exec_publish;
 

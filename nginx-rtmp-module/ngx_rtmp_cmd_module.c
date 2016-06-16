@@ -44,18 +44,24 @@ static ngx_int_t ngx_rtmp_cmd_recorded(ngx_rtmp_session_t *s,
 static ngx_int_t ngx_rtmp_cmd_set_buflen(ngx_rtmp_session_t *s,
        ngx_rtmp_set_buflen_t *v);
 
+// 命令的chain_handler,包括以下几种：
 
+// connect disconnect
 ngx_rtmp_connect_pt         ngx_rtmp_connect;
 ngx_rtmp_disconnect_pt      ngx_rtmp_disconnect;
+
+// create close delete
 ngx_rtmp_create_stream_pt   ngx_rtmp_create_stream;
 ngx_rtmp_close_stream_pt    ngx_rtmp_close_stream;
 ngx_rtmp_delete_stream_pt   ngx_rtmp_delete_stream;
+
+// publish play seek pause
 ngx_rtmp_publish_pt         ngx_rtmp_publish;
 ngx_rtmp_play_pt            ngx_rtmp_play;
 ngx_rtmp_seek_pt            ngx_rtmp_seek;
 ngx_rtmp_pause_pt           ngx_rtmp_pause;
 
-
+// 
 ngx_rtmp_stream_begin_pt    ngx_rtmp_stream_begin;
 ngx_rtmp_stream_eof_pt      ngx_rtmp_stream_eof;
 ngx_rtmp_stream_dry_pt      ngx_rtmp_stream_dry;
@@ -109,7 +115,7 @@ ngx_rtmp_cmd_fill_args(u_char name[NGX_RTMP_MAX_NAME],
     ngx_cpystrn(args, p, NGX_RTMP_MAX_ARGS);
 }
 
-
+// 在client connect server的时候被调用
 static ngx_int_t
 ngx_rtmp_cmd_connect_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ngx_chain_t *in)
@@ -178,10 +184,11 @@ ngx_rtmp_cmd_connect_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         v.app[len - 1] = 0;
     }
 
+    //  这个函数的意思就是从v.app后面搜索?,如果能找到，则把后面的参数复制到args里面
     ngx_rtmp_cmd_fill_args(v.app, v.args);
 
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
-            "connect: app='%s' args='%s' flashver='%s' swf_url='%s' "
+            "cmd: connect: app='%s' args='%s' flashver='%s' swf_url='%s' "
             "tc_url='%s' page_url='%s' acodecs=%uD vcodecs=%uD "
             "object_encoding=%ui",
             v.app, v.args, v.flashver, v.swf_url, v.tc_url, v.page_url,
@@ -191,6 +198,29 @@ ngx_rtmp_cmd_connect_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     return ngx_rtmp_connect(s, &v);
 }
 
+// 在client connect server的时候被调用
+// The command structure from server to client is as follows:
+/* 
++--------------+----------+----------------------------------------+
+ | Field Name | Type | Description |
+ +--------------+----------+----------------------------------------+
+ | Command Name | String | _result or _error; indicates whether |
+ | | | the response is result or error. |
+ +--------------+----------+----------------------------------------+
+ | Transaction | Number | Transaction ID is 1 for connect |
+ | ID | | responses |
+ | | | |
+ +--------------+----------+----------------------------------------+
+ | Properties | Object | Name-value pairs that describe the |
+ | | | properties(fmsver etc.) of the |
+ | | | connection. |
+ +--------------+----------+----------------------------------------+
+ | Information | Object | Name-value pairs that describe the |
+ | | | response from|the server. ’code’, |
+ | | | ’level’, ’description’ are names of few|
+ | | | among such information. |
+ +--------------+----------+----------------------------------------+
+ */
 
 static ngx_int_t
 ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
@@ -205,6 +235,7 @@ ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
     static double               capabilities = NGX_RTMP_CAPABILITIES;
     static double               object_encoding = 0;
 
+    // (1)Properties Object
     static ngx_rtmp_amf_elt_t  out_obj[] = {
 
         { NGX_RTMP_AMF_STRING,
@@ -216,6 +247,7 @@ ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
           &capabilities, 0 },
     };
 
+    // (2)Information Object
     static ngx_rtmp_amf_elt_t  out_inf[] = {
 
         { NGX_RTMP_AMF_STRING,
@@ -262,10 +294,11 @@ ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
 
     cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
 
+    // (3)Transaction ID 1
     trans = v->trans;
 
     /* fill session parameters */
-    s->connected = 1;
+    s->connected = 1;                 //连接建立
 
     ngx_memzero(&h, sizeof(h));
     h.csid = NGX_RTMP_CSID_AMF_INI;
@@ -314,6 +347,9 @@ ngx_rtmp_cmd_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
 
     object_encoding = v->object_encoding;
 
+    // Window Acknowledgement Size
+    // Set Peer Bandwidth
+    // User Control Message(StreamBegin)
     return ngx_rtmp_send_ack_size(s, cscf->ack_window) != NGX_OK ||
            ngx_rtmp_send_bandwidth(s, cscf->ack_window,
                                    NGX_RTMP_LIMIT_DYNAMIC) != NGX_OK ||
@@ -343,11 +379,29 @@ ngx_rtmp_cmd_create_stream_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         return NGX_ERROR;
     }
 
-    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "createStream");
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "cmd: createStream");
 
     return ngx_rtmp_create_stream(s, &v);
 }
 
+// 在rtmp client发送create_stream的时候被调用
+/*
++--------------+----------+----------------------------------------+
+ | Field Name | Type | Description |
+ +--------------+----------+----------------------------------------+
+ | Command Name | String | _result or _error; indicates whether |
+ | | | the response is result or error. |
+ +--------------+----------+----------------------------------------+
+ | Transaction | Number | ID of the command that response belongs|
+ | ID | | to. |
+ +--------------+----------+----------------------------------------+
+ | Command | Object | If there exists any command info this |
+ | Object | | is set, else this is set to null type. |
+ +--------------+----------+----------------------------------------+
+ | Stream | Number | The return value is either a stream ID |
+ | ID | | or an error information object. |
+ +--------------+----------+----------------------------------------+
+ */
 
 static ngx_int_t
 ngx_rtmp_cmd_create_stream(ngx_rtmp_session_t *s, ngx_rtmp_create_stream_t *v)
@@ -409,12 +463,12 @@ ngx_rtmp_cmd_close_stream_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         return NGX_ERROR;
     }
 
-    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "closeStream");
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "cmd: closeStream");
 
     return ngx_rtmp_close_stream(s, &v);
 }
 
-
+// 在rtmp client发送close_stream的时候被调用
 static ngx_int_t
 ngx_rtmp_cmd_close_stream(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v)
 {
@@ -452,20 +506,52 @@ ngx_rtmp_cmd_delete_stream_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     return ngx_rtmp_delete_stream(s, &v);
 }
 
-
+// 这个函数有两种情况会被调用：
+// （1）client disconnect的时候被调用
+// （2）在客户端发送delete stream的时候被调用
+// 它会直接触发ngx_rtmp_close_stream
 static ngx_int_t
 ngx_rtmp_cmd_delete_stream(ngx_rtmp_session_t *s, ngx_rtmp_delete_stream_t *v)
 {
     ngx_rtmp_close_stream_t         cv;
 
-    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "deleteStream");
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "cmd: deleteStream");
 
     cv.stream = 0;
 
     return ngx_rtmp_close_stream(s, &cv);
 }
 
-
+/*
+ +--------------+----------+----------------------------------------+
+ | Field Name | Type | Description |
+ +--------------+----------+----------------------------------------+
+ | Command Name | String | Name of the command, set to "publish". |
+ +--------------+----------+----------------------------------------+
+ | Transaction | Number | Transaction ID set to 0. |
+ | ID | | |
+ +--------------+----------+----------------------------------------+
+ | Command | Null | Command information object does not |
+ | Object | | exist. Set to null type. |
+ +--------------+----------+----------------------------------------+
+ | Publishing | String | Name with which the stream is |
+ | Name | | published. |
+ +--------------+----------+----------------------------------------+
+ | Publishing | String | Type of publishing. Set to "live", |
+ | Type | | "record", or "append". |
+ | | | record: The stream is published and the|
+ | | | data is recorded to a new file.The file|
+ | | | is stored on the server in a |
+ | | | subdirectory within the directory that |
+ | | | contains the server application. If the|
+ | | | file already exists, it is overwritten.|
+ | | | append: The stream is published and the|
+ | | | data is appended to a file. If no file |
+ | | | is found, it is created. |
+ | | | live: Live data is published without |
+ | | | recording it in a file. |
+ +--------------+----------+----------------------------------------+
+ */
 static ngx_int_t
 ngx_rtmp_cmd_publish_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ngx_chain_t *in)
@@ -485,11 +571,11 @@ ngx_rtmp_cmd_publish_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
         { NGX_RTMP_AMF_STRING,
           ngx_null_string,
-          &v.name, sizeof(v.name) },
+          &v.name, sizeof(v.name) },    //Publishing Name
 
         { NGX_RTMP_AMF_OPTIONAL | NGX_RTMP_AMF_STRING,
           ngx_null_string,
-          &v.type, sizeof(v.type) },
+          &v.type, sizeof(v.type) },    //Publishing Type
     };
 
     ngx_memzero(&v, sizeof(v));
@@ -503,9 +589,10 @@ ngx_rtmp_cmd_publish_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     ngx_rtmp_cmd_fill_args(v.name, v.args);
 
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
-                  "publish: name='%s' args='%s' type=%s silent=%d",
+                  "cmd: publish: name='%s' args='%s' type=%s silent=%d",
                   v.name, v.args, v.type, v.silent);
 
+    // 牢记这个函数实际上调用的是：ngx_rtmp_dash_module的next_publish函数
     return ngx_rtmp_publish(s, &v);
 }
 
@@ -516,6 +603,7 @@ ngx_rtmp_cmd_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
     return NGX_OK;
 }
 
+// 这个函数会在rtmp客户端调用play的时候首次被调用
 static ngx_int_t
 ngx_rtmp_cmd_play_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ngx_chain_t *in)
@@ -561,7 +649,7 @@ ngx_rtmp_cmd_play_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     ngx_rtmp_cmd_fill_args(v.name, v.args);
 
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
-                  "play: name='%s' args='%s' start=%i duration=%i "
+                  "cmd: play: name='%s' args='%s' start=%i duration=%i "
                   "reset=%i silent=%i",
                   v.name, v.args, (ngx_int_t) v.start,
                   (ngx_int_t) v.duration, (ngx_int_t) v.reset,
@@ -693,12 +781,12 @@ static ngx_int_t
 ngx_rtmp_cmd_disconnect_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                         ngx_chain_t *in)
 {
-    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "disconnect");
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "cmd: disconnect");
 
     return ngx_rtmp_disconnect(s);
 }
 
-
+// 在客户端disconnect的被调用
 static ngx_int_t
 ngx_rtmp_cmd_disconnect(ngx_rtmp_session_t *s)
 {
@@ -785,7 +873,7 @@ ngx_rtmp_cmd_set_buflen(ngx_rtmp_session_t *s, ngx_rtmp_set_buflen_t *v)
     return NGX_OK;
 }
 
-
+// type of command supported by nginx-rtmp-module
 static ngx_rtmp_amf_handler_t ngx_rtmp_cmd_map[] = {
     { ngx_string("connect"),            ngx_rtmp_cmd_connect_init           },
     { ngx_string("createStream"),       ngx_rtmp_cmd_create_stream_init     },
@@ -841,6 +929,7 @@ ngx_rtmp_cmd_postconfiguration(ngx_conf_t *cf)
     ngx_rtmp_create_stream = ngx_rtmp_cmd_create_stream;
     ngx_rtmp_close_stream = ngx_rtmp_cmd_close_stream;
     ngx_rtmp_delete_stream = ngx_rtmp_cmd_delete_stream;
+
     ngx_rtmp_publish = ngx_rtmp_cmd_publish;
     ngx_rtmp_play = ngx_rtmp_cmd_play;
     ngx_rtmp_seek = ngx_rtmp_cmd_seek;

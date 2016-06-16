@@ -22,7 +22,7 @@
 /* Basic RTMP call support */
 
 typedef struct {
-    double                          trans;
+    double                          trans;                          // Transaction ID 1
     u_char                          app[NGX_RTMP_MAX_NAME];
     u_char                          args[NGX_RTMP_MAX_ARGS];
     u_char                          flashver[32];
@@ -52,10 +52,10 @@ typedef struct {
 
 
 typedef struct {
-    u_char                          name[NGX_RTMP_MAX_NAME];
-    u_char                          args[NGX_RTMP_MAX_ARGS];
-    u_char                          type[16];
-    int                             silent;
+    u_char                          name[NGX_RTMP_MAX_NAME];    //流的名称
+    u_char                          args[NGX_RTMP_MAX_ARGS];    //流的参数
+    u_char                          type[16];                   //流的类型
+    int                             silent;                     //待定
 } ngx_rtmp_publish_t;
 
 

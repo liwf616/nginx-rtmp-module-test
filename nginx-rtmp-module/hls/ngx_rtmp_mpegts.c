@@ -217,7 +217,7 @@ ngx_rtmp_mpegts_write_frame(ngx_rtmp_mpegts_file_t *file,
 
         f->cc++;
 
-        *p++ = 0x47;
+        *p++ = 0x47;    //sync_btye
         *p++ = (u_char) (f->pid >> 8);
 
         if (first) {

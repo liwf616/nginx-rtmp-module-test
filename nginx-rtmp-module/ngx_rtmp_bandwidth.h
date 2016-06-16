@@ -17,11 +17,11 @@
 
 
 typedef struct {
-    uint64_t            bytes;
+    uint64_t            bytes;			// 收到的总的byte数目
     uint64_t            bandwidth;      /* bytes/sec */
 
-    time_t              intl_end;
-    uint64_t            intl_bytes;
+    time_t              intl_end;		//记录下次更新的时间
+    uint64_t            intl_bytes;		//记录每10秒内收到的byte数目
 } ngx_rtmp_bandwidth_t;
 
 

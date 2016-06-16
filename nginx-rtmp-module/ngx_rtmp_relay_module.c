@@ -55,7 +55,7 @@ typedef struct {
     ngx_flag_t                  session_relay;
     ngx_msec_t                  push_reconnect;
     ngx_msec_t                  pull_reconnect;
-    ngx_rtmp_relay_ctx_t        **ctx;
+    ngx_rtmp_relay_ctx_t        **ctx;         //这下面挂载着所有的push_ctx
 } ngx_rtmp_relay_app_conf_t;
 
 
@@ -226,7 +226,7 @@ ngx_rtmp_relay_static_pull_reconnect(ngx_event_t *ev)
 
     racf = ngx_rtmp_get_module_app_conf(&rs->cctx, ngx_rtmp_relay_module);
 
-    ngx_log_debug0(NGX_LOG_DEBUG_RTMP, racf->log, 0,
+    ngx_log_error(NGX_LOG_INFO, racf->log, 0,
                    "relay: reconnecting static pull");
 
     ctx = ngx_rtmp_relay_create_connection(&rs->cctx, &rs->target->name,
@@ -251,7 +251,7 @@ ngx_rtmp_relay_push_reconnect(ngx_event_t *ev)
     ngx_uint_t                      n;
     ngx_rtmp_relay_target_t        *target, **t;
 
-    ngx_log_debug0(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
             "relay: push reconnect");
 
     racf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_relay_module);
@@ -597,14 +597,16 @@ ngx_rtmp_relay_create(ngx_rtmp_session_t *s, ngx_str_t *name,
             break;
         }
     }
-
+    //pull会走这个流程
     if (*cctx) {
         play_ctx->publish = (*cctx)->publish;
+        
+        //把player挂载到流对应的player链表下面
         play_ctx->next = (*cctx)->play;
         (*cctx)->play = play_ctx;
         return NGX_OK;
     }
-
+    //push会走这个流程
     publish_ctx = create_publish_ctx(s, name, target);
     if (publish_ctx == NULL) {
         ngx_rtmp_finalize_session(play_ctx->session);
@@ -1447,10 +1449,11 @@ ngx_rtmp_relay_push_pull(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     ngx_rtmp_relay_static_t            *rs;
     u_char                             *p;
 
-    value = cf->args->elts;
+    value = cf->args->elts; // pull rtmp:// name = ""
 
     racf = ngx_rtmp_conf_get_module_app_conf(cf, ngx_rtmp_relay_module);
 
+    // pull判断
     is_pull = (value[0].data[3] == 'l');
     is_static = 0;
 
@@ -1462,10 +1465,11 @@ ngx_rtmp_relay_push_pull(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     target->tag = &ngx_rtmp_relay_module;
     target->data = target;
 
+    //url
     u = &target->url;
     u->default_port = 1935;
     u->uri_part = 1;
-    u->url = value[1];
+    u->url = value[1];          //rtmp://localhost:port/app/stream
 
     if (ngx_strncasecmp(u->url.data, (u_char *) "rtmp://", 7) == 0) {
         u->url.data += 7;
@@ -1537,6 +1541,7 @@ ngx_rtmp_relay_push_pull(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return "unsuppored parameter";
     }
 
+    // makes pull static, such pull is created at nginx start
     if (is_static) {
 
         if (!is_pull) {
@@ -1578,10 +1583,10 @@ ngx_rtmp_relay_push_pull(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         t = ngx_array_push(&racf->static_pulls);
 
     } else if (is_pull) {
-        t = ngx_array_push(&racf->pulls);
+        t = ngx_array_push(&racf->pulls);   //放入pull target数组中
 
     } else {
-        t = ngx_array_push(&racf->pushes);
+        t = ngx_array_push(&racf->pushes);  //放入push target数组中
     }
 
     if (t == NULL) {

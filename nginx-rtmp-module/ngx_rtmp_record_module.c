@@ -24,23 +24,38 @@ static ngx_rtmp_stream_eof_pt       next_stream_eof;
 
 static char *ngx_rtmp_record_recorder(ngx_conf_t *cf, ngx_command_t *cmd,
        void *conf);
+
+// 模块上下文
 static ngx_int_t ngx_rtmp_record_postconfiguration(ngx_conf_t *cf);
 static void * ngx_rtmp_record_create_app_conf(ngx_conf_t *cf);
 static char * ngx_rtmp_record_merge_app_conf(ngx_conf_t *cf,
        void *parent, void *child);
+
+// 在接受到一个video or audio tag后，执行，这里面可能会包含很多rtmp流
+static ngx_int_t ngx_rtmp_record_av(ngx_rtmp_session_t *s,
+       ngx_rtmp_header_t *h, ngx_chain_t *in);
+// 被上面的函数调用，该函数只是针对一个流实现的
+static ngx_int_t ngx_rtmp_record_node_av(ngx_rtmp_session_t *s,
+       ngx_rtmp_record_rec_ctx_t *rctx, ngx_rtmp_header_t *h, ngx_chain_t *in);
+
+//把ngx_chain_t *in里面的所有的数据（即一个tag的数据）写入rctx－>file里面，这里面包括tag header,tag body和pre_tag size等
+//video: avc_header-->video key frame-->video normal frame
+//audio: aac_header-->aac normal frame
 static ngx_int_t ngx_rtmp_record_write_frame(ngx_rtmp_session_t *s,
        ngx_rtmp_record_rec_ctx_t *rctx,
        ngx_rtmp_header_t *h, ngx_chain_t *in, ngx_int_t inc_nframes);
-static ngx_int_t ngx_rtmp_record_av(ngx_rtmp_session_t *s,
-       ngx_rtmp_header_t *h, ngx_chain_t *in);
-static ngx_int_t ngx_rtmp_record_node_av(ngx_rtmp_session_t *s,
-       ngx_rtmp_record_rec_ctx_t *rctx, ngx_rtmp_header_t *h, ngx_chain_t *in);
-static ngx_int_t ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
-       ngx_rtmp_record_rec_ctx_t *rctx);
-static ngx_int_t ngx_rtmp_record_node_close(ngx_rtmp_session_t *s,
-       ngx_rtmp_record_rec_ctx_t *rctx);
+
+// 根据用户在record里面的配置，生成一个ngx_str_t的路径 
 static void  ngx_rtmp_record_make_path(ngx_rtmp_session_t *s,
        ngx_rtmp_record_rec_ctx_t *rctx, ngx_str_t *path);
+// 创建流对应的文件路径，存储模式,open file等
+static ngx_int_t ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
+       ngx_rtmp_record_rec_ctx_t *rctx);
+// 关闭文件-->close file
+static ngx_int_t ngx_rtmp_record_node_close(ngx_rtmp_session_t *s,
+       ngx_rtmp_record_rec_ctx_t *rctx);
+
+// 这个函数的目的是初始化ngx_rtmp_record_ctx_t
 static ngx_int_t ngx_rtmp_record_init(ngx_rtmp_session_t *s);
 
 
@@ -55,7 +70,7 @@ static ngx_conf_bitmask_t  ngx_rtmp_record_mask[] = {
     { ngx_null_string,                  0                           }
 };
 
-
+// 模块配置指令
 static ngx_command_t  ngx_rtmp_record_commands[] = {
 
     { ngx_string("record"),
@@ -145,11 +160,10 @@ static ngx_command_t  ngx_rtmp_record_commands[] = {
       0,
       NULL },
 
-
       ngx_null_command
 };
 
-
+// 模块上下文
 static ngx_rtmp_module_t  ngx_rtmp_record_module_ctx = {
     NULL,                                   /* preconfiguration */
     ngx_rtmp_record_postconfiguration,      /* postconfiguration */
@@ -161,7 +175,7 @@ static ngx_rtmp_module_t  ngx_rtmp_record_module_ctx = {
     ngx_rtmp_record_merge_app_conf          /* merge app configuration */
 };
 
-
+// 模块的定义
 ngx_module_t  ngx_rtmp_record_module = {
     NGX_MODULE_V1,
     &ngx_rtmp_record_module_ctx,            /* module context */
@@ -238,7 +252,7 @@ ngx_rtmp_record_merge_app_conf(ngx_conf_t *cf, void *parent, void *child)
     return NGX_CONF_OK;
 }
 
-
+// 在flv文件里面写入flv头部,需要注意的是第5个字节可能在后面会被重新写入
 static ngx_int_t
 ngx_rtmp_record_write_header(ngx_file_t *file)
 {
@@ -263,7 +277,6 @@ ngx_rtmp_record_write_header(ngx_file_t *file)
            : NGX_OK;
 }
 
-
 static ngx_rtmp_record_rec_ctx_t *
 ngx_rtmp_record_get_node_ctx(ngx_rtmp_session_t *s, ngx_uint_t n)
 {
@@ -285,7 +298,7 @@ ngx_rtmp_record_get_node_ctx(ngx_rtmp_session_t *s, ngx_uint_t n)
     return &rctx[n];
 }
 
-
+//这个是手动控制模式下使用的open接口
 ngx_int_t
 ngx_rtmp_record_open(ngx_rtmp_session_t *s, ngx_uint_t n, ngx_str_t *path)
 {
@@ -313,7 +326,7 @@ ngx_rtmp_record_open(ngx_rtmp_session_t *s, ngx_uint_t n, ngx_str_t *path)
     return NGX_OK;
 }
 
-
+//这个是手动控制模式下使用的接口
 ngx_int_t
 ngx_rtmp_record_close(ngx_rtmp_session_t *s, ngx_uint_t n, ngx_str_t *path)
 {
@@ -364,7 +377,8 @@ ngx_rtmp_record_find(ngx_rtmp_record_app_conf_t *racf, ngx_str_t *id)
 }
 
 
-/* This funcion returns pointer to a static buffer */
+/* This funcion returns pointer to a static buffer
+这个函数的主要目的就是根据用户在record里面的配置，生成一个ngx_str_t的路径 */
 static void
 ngx_rtmp_record_make_path(ngx_rtmp_session_t *s,
                           ngx_rtmp_record_rec_ctx_t *rctx, ngx_str_t *path)
@@ -375,7 +389,7 @@ ngx_rtmp_record_make_path(ngx_rtmp_session_t *s,
     struct tm                       tm;
 
     static u_char                   buf[NGX_TIME_T_LEN + 1];
-    static u_char                   pbuf[NGX_MAX_PATH + 1];
+    static u_char                   pbuf[NGX_MAX_PATH + 1];   //存储文件路径的临时缓冲
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_record_module);
 
@@ -391,12 +405,13 @@ ngx_rtmp_record_make_path(ngx_rtmp_session_t *s,
     p = (u_char *)ngx_escape_uri(p, ctx->name, ngx_min(ngx_strlen(ctx->name),
                 (size_t)(l - p)), NGX_ESCAPE_URI_COMPONENT);
 
-    /* append timestamp */
+    /* append timestamp<-->record_unique on */
     if (rracf->unique) {
         p = ngx_cpymem(p, buf, ngx_min(ngx_sprintf(buf, "-%T",
                        rctx->timestamp) - buf, l - p));
     }
 
+    // 添加后缀
     if (ngx_strchr(rracf->suffix.data, '%')) {
         ngx_libc_localtime(rctx->timestamp, &tm);
         p += strftime((char *) p, l - p, (char *) rracf->suffix.data, &tm);
@@ -430,7 +445,7 @@ ngx_rtmp_record_notify_error(ngx_rtmp_session_t *s,
                          rracf->id.data ? (char *) rracf->id.data : "");
 }
 
-
+// 创建流对应的文件路径，存储模式,open file等
 static ngx_int_t
 ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
                           ngx_rtmp_record_rec_ctx_t *rctx)
@@ -446,6 +461,7 @@ ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
     rracf = rctx->conf;
     tag_size = 0;
 
+    //如果已经创建过了，则退出这一个过程，否则opening
     if (rctx->file.fd != NGX_INVALID_FILE) {
         return NGX_AGAIN;
     }
@@ -458,11 +474,14 @@ ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
     rctx->last = *ngx_cached_time;
     rctx->timestamp = ngx_cached_time->sec;
 
+    // 创建存储路径
     ngx_rtmp_record_make_path(s, rctx, &path);
 
+    // 设置存储模式
     mode = rracf->append ? NGX_FILE_RDWR : NGX_FILE_WRONLY;
     create_mode = rracf->append ? NGX_FILE_CREATE_OR_OPEN : NGX_FILE_TRUNCATE;
 
+    // 初始化文件结构,open file等
     ngx_memzero(&rctx->file, sizeof(rctx->file));
     rctx->file.offset = 0;
     rctx->file.log = s->connection->log;
@@ -501,7 +520,7 @@ ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
         ngx_rtmp_send_status(s, "NetStream.Record.Start", "status",
                              rracf->id.data ? (char *) rracf->id.data : "");
     }
-
+    //如果是append模式的话，需要从文件最后的位置开始写数据，并且时间戳遵循递加的原则
     if (rracf->append) {
 
         file_size = 0;
@@ -529,7 +548,7 @@ ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
         if (file_size < 4) {
             goto done;
         }
-
+        // 读取最后4个字节
         if (ngx_read_file(&rctx->file, buf, 4, file_size - 4) != 4) {
             ngx_log_error(NGX_LOG_CRIT, s->connection->log, ngx_errno,
                           "record: %V tag size read failed", &rracf->id);
@@ -542,6 +561,7 @@ ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
         p[2] = buf[1];
         p[3] = buf[0];
 
+        //pre_tag_size
         if (tag_size == 0 || tag_size + 4 > file_size) {
             file_size = 0;
             goto done;
@@ -553,7 +573,7 @@ ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
                           "record: %V tag read failed", &rracf->id);
             goto done;
         }
-
+        //获取数据最后一个tag的长度
         p = (u_char *) &mlen;
         p[0] = buf[3];
         p[1] = buf[2];
@@ -566,7 +586,7 @@ ngx_rtmp_record_node_open(ngx_rtmp_session_t *s,
                           "tag_size=%uD, mlen=%uD", &rracf->id, tag_size, mlen);
             goto done;
         }
-
+        //获取最后一个tag的时间戳
         p = (u_char *) &timestamp;
         p[3] = buf[7];
         p[0] = buf[6];
@@ -585,7 +605,7 @@ done:
     return NGX_OK;
 }
 
-
+// 这个函数的目的是初始化ngx_rtmp_record_ctx_t
 static ngx_int_t
 ngx_rtmp_record_init(ngx_rtmp_session_t *s)
 {
@@ -594,6 +614,7 @@ ngx_rtmp_record_init(ngx_rtmp_session_t *s)
     ngx_rtmp_record_ctx_t          *ctx;
     ngx_uint_t                      n;
 
+    // 这个地方主要是给ngx_rtmp_record_module关联ngx_rtmp_record_ctx_t
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_record_module);
 
     if (ctx) {
@@ -614,6 +635,8 @@ ngx_rtmp_record_init(ngx_rtmp_session_t *s)
 
     ngx_rtmp_set_ctx(s, ctx, ngx_rtmp_record_module);
 
+    //这个地方可以看出ngx_rtmp_record_ctx_t rec数组里面ngx_rtmp_record_rec_ctx_t的数目
+    //是跟ngx_rtmp_record_app_conf_t里面ngx_rtmp_record_app_conf_t的数目是相同的
     if (ngx_array_init(&ctx->rec, s->connection->pool, racf->rec.nelts,
                        sizeof(ngx_rtmp_record_rec_ctx_t))
         != NGX_OK)
@@ -629,6 +652,7 @@ ngx_rtmp_record_init(ngx_rtmp_session_t *s)
         return NGX_ERROR;
     }
 
+    //初始化ngx_rtmp_record_ctx_t结构体中ngx_rtmp_record_rec_ctx_t中的部分参数
     for (n = 0; n < racf->rec.nelts; ++n, ++rracf, ++rctx) {
         ngx_memzero(rctx, sizeof(*rctx));
 
@@ -639,7 +663,7 @@ ngx_rtmp_record_init(ngx_rtmp_session_t *s)
     return NGX_OK;
 }
 
-
+// record入口,初始化流对应的ngx_rtmp_record_rec_ctx_t,及open file等
 static void
 ngx_rtmp_record_start(ngx_rtmp_session_t *s)
 {
@@ -670,7 +694,7 @@ ngx_rtmp_record_start(ngx_rtmp_session_t *s)
     }
 }
 
-
+// 结束某支流的record
 static void
 ngx_rtmp_record_stop(ngx_rtmp_session_t *s)
 {
@@ -780,7 +804,7 @@ next:
     return next_stream_eof(s, v);
 }
 
-
+// 关闭文件-->close file
 static ngx_int_t
 ngx_rtmp_record_node_close(ngx_rtmp_session_t *s,
                            ngx_rtmp_record_rec_ctx_t *rctx)
@@ -797,7 +821,7 @@ ngx_rtmp_record_node_close(ngx_rtmp_session_t *s,
     if (rctx->file.fd == NGX_INVALID_FILE) {
         return NGX_AGAIN;
     }
-
+    // 如果之前在该文件里面写过一些数据的话，则需要在重新写一点数据
     if (rctx->initialized) {
         av = 0;
 
@@ -808,13 +832,13 @@ ngx_rtmp_record_node_close(ngx_rtmp_session_t *s,
         if (rctx->audio) {
             av |= 0x04;
         }
-
+        //重新修改flv header的第5个字节
         if (ngx_write_file(&rctx->file, &av, 1, 4) == NGX_ERROR) {
             ngx_log_error(NGX_LOG_CRIT, s->connection->log, ngx_errno,
                           "record: %V error writing av mask", &rracf->id);
         }
     }
-
+    //关闭文件，并将fd置为NGX_INVALID_FILE
     if (ngx_close_file(rctx->file.fd) == NGX_FILE_ERROR) {
         err = ngx_errno;
         ngx_log_error(NGX_LOG_CRIT, s->connection->log, err,
@@ -828,6 +852,7 @@ ngx_rtmp_record_node_close(ngx_rtmp_session_t *s,
     ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                    "record: %V closed", &rracf->id);
 
+    //record_notify on
     if (rracf->notify) {
         ngx_rtmp_send_status(s, "NetStream.Record.Stop", "status",
                              rracf->id.data ? (char *) rracf->id.data : "");
@@ -842,6 +867,7 @@ ngx_rtmp_record_node_close(ngx_rtmp_session_t *s,
     v.recorder = rracf->id;
     ngx_rtmp_record_make_path(s, rctx, &v.path);
 
+    // 完成某股流的录制，这里不做任何操作
     rc = ngx_rtmp_record_done(s, &v);
 
     s->app_conf = app_conf;
@@ -867,7 +893,9 @@ next:
     return next_close_stream(s, v);
 }
 
-
+//把ngx_chain_t *in里面的所有的数据（即一个tag的数据）写入rctx－>file里面，这里面包括tag header,tag body和pre_tag size等
+//video: avc_header-->video key frame-->video normal frame
+//audio: aac_header-->aac normal frame
 static ngx_int_t
 ngx_rtmp_record_write_frame(ngx_rtmp_session_t *s,
                             ngx_rtmp_record_rec_ctx_t *rctx,
@@ -883,13 +911,14 @@ ngx_rtmp_record_write_frame(ngx_rtmp_session_t *s,
     ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                    "record: %V frame: mlen=%uD",
                    &rracf->id, h->mlen);
-
+    //has_audio or has_video赋值
     if (h->type == NGX_RTMP_MSG_VIDEO) {
         rctx->video = 1;
     } else {
         rctx->audio = 1;
     }
 
+    //timestamp = h->timestamp + rctx->time_shift
     timestamp = h->timestamp - rctx->epoch;
 
     if ((int32_t) timestamp < 0) {
@@ -901,26 +930,26 @@ ngx_rtmp_record_write_frame(ngx_rtmp_session_t *s,
 
     /* write tag header */
     ph = hdr;
-
+    /*audio,video,Metadata*/
     *ph++ = (u_char)h->type;
-
+    // tag data的长度
     p = (u_char*)&h->mlen;
     *ph++ = p[2];
     *ph++ = p[1];
     *ph++ = p[0];
-
+    // 时间戳 
     p = (u_char*)&timestamp;
     *ph++ = p[2];
     *ph++ = p[1];
     *ph++ = p[0];
     *ph++ = p[3];
-
+    // streamID
     *ph++ = 0;
     *ph++ = 0;
     *ph++ = 0;
 
     tag_size = (ph - hdr) + h->mlen;
-
+    /* write tag header */
     if (ngx_write_file(&rctx->file, hdr, ph - hdr, rctx->file.offset)
         == NGX_ERROR)
     {
@@ -950,7 +979,7 @@ ngx_rtmp_record_write_frame(ngx_rtmp_session_t *s,
         }
     }
 
-    /* write tag size */
+    /* write pre_tag size */
     ph = hdr;
     p = (u_char*)&tag_size;
 
@@ -978,7 +1007,7 @@ ngx_rtmp_record_write_frame(ngx_rtmp_session_t *s,
     return NGX_OK;
 }
 
-
+//获取这个链表里面aac或者h264数据的总大小
 static size_t
 ngx_rtmp_record_get_chain_mlen(ngx_chain_t *in)
 {
@@ -1000,6 +1029,7 @@ ngx_rtmp_record_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     ngx_rtmp_record_rec_ctx_t      *rctx;
     ngx_uint_t                      n;
 
+    // 获取ngx_rtmp_record_module对应的模块上下文
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_record_module);
 
     if (ctx == NULL) {
@@ -1015,7 +1045,10 @@ ngx_rtmp_record_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     return NGX_OK;
 }
 
-
+// 这个函数的主要目的是rctx->file对应的文件里面写入in面的tag_data数据。
+// （1）对于视频，需要判断是否收到avc_sequence_header,key_frame等关键信息，否则的话，会跳过一些tag数据
+// 同时如果是第一次写文件的话，还需要写入flv header等
+// （2）对于音频数据的话，只需要判断是否已经收到aac_seqence_header即可，如果已经收到了，则会直接开始写数据即可
 static ngx_int_t
 ngx_rtmp_record_node_av(ngx_rtmp_session_t *s, ngx_rtmp_record_rec_ctx_t *rctx,
                         ngx_rtmp_header_t *h, ngx_chain_t *in)
@@ -1085,7 +1118,7 @@ ngx_rtmp_record_node_av(ngx_rtmp_session_t *s, ngx_rtmp_record_rec_ctx_t *rctx,
     {
         return NGX_OK;
     }
-
+    //写入flv header
     if (!rctx->initialized) {
 
         rctx->initialized = 1;
@@ -1098,7 +1131,7 @@ ngx_rtmp_record_node_av(ngx_rtmp_session_t *s, ngx_rtmp_record_rec_ctx_t *rctx,
             return NGX_OK;
         }
     }
-
+    //首先写入 aac sequence header和avc sequence header
     codec_ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_codec_module);
     if (codec_ctx) {
         ch = *h;
@@ -1144,7 +1177,9 @@ ngx_rtmp_record_node_av(ngx_rtmp_session_t *s, ngx_rtmp_record_rec_ctx_t *rctx,
             rctx->avc_header_sent = 1;
         }
     }
-
+    //在将真正的video和audio 数据写入文件时，需要遵循下面两个原则
+    //（1）对于video，如果没有avc header或者视频关键帧，则skip视频帧
+    //（2）对于audio, 如果没有aac header，则skip音频帧
     if (h->type == NGX_RTMP_MSG_VIDEO) {
         if (codec_ctx && codec_ctx->video_codec_id == NGX_RTMP_VIDEO_H264 &&
             !rctx->avc_header_sent)

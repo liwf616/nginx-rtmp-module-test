@@ -28,6 +28,11 @@ static ngx_int_t ngx_rtmp_hls_flush_audio(ngx_rtmp_session_t *s);
 static ngx_int_t ngx_rtmp_hls_ensure_directory(ngx_rtmp_session_t *s,
        ngx_str_t *path);
 
+#if (NGX_DEBUG)
+static void
+ngx_rtmp_hls_dump_header(ngx_rtmp_session_t *s, const char *type,
+    ngx_chain_t *in);
+#endif
 
 #define NGX_RTMP_HLS_BUFSIZE            (1024*1024)
 #define NGX_RTMP_HLS_DIR_ACCESS         0744
@@ -49,23 +54,24 @@ typedef struct {
 
 
 typedef struct {
-    unsigned                            opened:1;
+    unsigned                            opened:1;           //文件是否被关闭，或者被打开
 
     ngx_rtmp_mpegts_file_t              file;
 
-    ngx_str_t                           playlist;
+    ngx_str_t                           playlist;           //完整的m3u8名称"
+                                                            //Users/liwf/Movies/hls/genshuixue/index.m3u8
     ngx_str_t                           playlist_bak;
     ngx_str_t                           var_playlist;
     ngx_str_t                           var_playlist_bak;
-    ngx_str_t                           stream;
+    ngx_str_t                           stream;             // /Users/liwf/Movies/hls/genshuixue/
     ngx_str_t                           keyfile;
-    ngx_str_t                           name;
+    ngx_str_t                           name;               //genshuixue
     u_char                              key[16];
 
-    uint64_t                            frag;
+    uint64_t                            frag;               //最小的frag的index
     uint64_t                            frag_ts;
     uint64_t                            key_id;
-    ngx_uint_t                          nfrags;
+    ngx_uint_t                          nfrags;             //该stream已经切出的fragments num
     ngx_rtmp_hls_frag_t                *frags; /* circular 2 * winfrags + 1 */
 
     ngx_uint_t                          audio_cc;
@@ -342,7 +348,7 @@ ngx_module_t  ngx_rtmp_hls_module = {
     NGX_MODULE_V1_PADDING
 };
 
-
+//  从环形数组里面取出ctx->frag + n这个分片号对应的ngx_rtmp_hls_frag_t结构
 static ngx_rtmp_hls_frag_t *
 ngx_rtmp_hls_get_frag(ngx_rtmp_session_t *s, ngx_int_t n)
 {
@@ -355,7 +361,7 @@ ngx_rtmp_hls_get_frag(ngx_rtmp_session_t *s, ngx_int_t n)
     return &ctx->frags[(ctx->frag + n) % (hacf->winfrags * 2 + 1)];
 }
 
-
+// 计算出frag和nfrags两个参数
 static void
 ngx_rtmp_hls_next_frag(ngx_rtmp_session_t *s)
 {
@@ -364,7 +370,7 @@ ngx_rtmp_hls_next_frag(ngx_rtmp_session_t *s)
 
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
-
+    // 在分片数目达到最大值时将不会发生变化,
     if (ctx->nfrags == hacf->winfrags) {
         ctx->frag++;
     } else {
@@ -385,7 +391,7 @@ ngx_rtmp_hls_rename_file(u_char *src, u_char *dst)
 #endif
 }
 
-
+// 重新更新自适应m3u8列表
 static ngx_int_t
 ngx_rtmp_hls_write_variant_playlist(ngx_rtmp_session_t *s)
 {
@@ -478,7 +484,7 @@ ngx_rtmp_hls_write_variant_playlist(ngx_rtmp_session_t *s)
     return NGX_OK;
 }
 
-
+// 重新更新m3u8列表
 static ngx_int_t
 ngx_rtmp_hls_write_playlist(ngx_rtmp_session_t *s)
 {
@@ -507,7 +513,7 @@ ngx_rtmp_hls_write_playlist(ngx_rtmp_session_t *s)
                       &ctx->playlist_bak);
         return NGX_ERROR;
     }
-
+    // 纪录m3u8列表里面最大的那个分片大
     max_frag = hacf->fraglen / 1000;
 
     for (i = 0; i < ctx->nfrags; i++) {
@@ -679,7 +685,8 @@ ngx_rtmp_hls_append_aud(ngx_rtmp_session_t *s, ngx_buf_t *out)
     return NGX_OK;
 }
 
-
+// 这个函数的主要目的就是从之前保存的avc_header里面读取出，sps和pps
+// 并且需要在他们前面添加 00 00 00 01
 static ngx_int_t
 ngx_rtmp_hls_append_sps_pps(ngx_rtmp_session_t *s, ngx_buf_t *out)
 {
@@ -700,6 +707,21 @@ ngx_rtmp_hls_append_sps_pps(ngx_rtmp_session_t *s, ngx_buf_t *out)
     }
 
     in = codec_ctx->avc_header;
+
+    #if (NGX_DEBUG)
+    
+    ngx_rtmp_hls_dump_header(s, "avc", in);
+
+    ngx_log_debug8(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+              "hls: avc header "
+              "session=%ui, name =%s, codec_ctx=%ui, avc_header=%ui "
+              "profile=%ui, level=%ui, "
+              "width=%ui, height=%ui",
+              s, (u_char*)ctx->name.data, codec_ctx, codec_ctx->avc_header,
+              codec_ctx->avc_profile, codec_ctx->avc_level,
+              codec_ctx->width, codec_ctx->height);
+    #endif
+
     if (in == NULL) {
         return NGX_ERROR;
     }
@@ -731,8 +753,8 @@ ngx_rtmp_hls_append_sps_pps(ngx_rtmp_session_t *s, ngx_buf_t *out)
 
     nnals &= 0x1f; /* 5lsb */
 
-    ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "hls: SPS number: %uz", nnals);
+    // ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+    //                "hls: SPS number: %uz", nnals);
 
     /* SPS */
     for (n = 0; ; ++n) {
@@ -790,7 +812,10 @@ ngx_rtmp_hls_append_sps_pps(ngx_rtmp_session_t *s, ngx_buf_t *out)
     return NGX_OK;
 }
 
-
+// 根据不同的策略，获取分片名称
+// （1）根据时间戳
+// （2）根据系统当前时间
+// （3）根据index递增。
 static uint64_t
 ngx_rtmp_hls_get_fragment_id(ngx_rtmp_session_t *s, uint64_t ts)
 {
@@ -814,7 +839,7 @@ ngx_rtmp_hls_get_fragment_id(ngx_rtmp_session_t *s, uint64_t ts)
     }
 }
 
-
+// close当前ts文件，并更新m3u8列表
 static ngx_int_t
 ngx_rtmp_hls_close_fragment(ngx_rtmp_session_t *s)
 {
@@ -825,8 +850,8 @@ ngx_rtmp_hls_close_fragment(ngx_rtmp_session_t *s)
         return NGX_OK;
     }
 
-    ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "hls: close fragment n=%uL", ctx->frag);
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+                   "hls: name = %s, close fragment n=%uL", (u_char*)ctx->name.data,ctx->frag);
 
     ngx_rtmp_mpegts_close_file(&ctx->file);
 
@@ -839,7 +864,8 @@ ngx_rtmp_hls_close_fragment(ngx_rtmp_session_t *s)
     return NGX_OK;
 }
 
-
+// open一个新的ts文件
+// ts：时间戳
 static ngx_int_t
 ngx_rtmp_hls_open_fragment(ngx_rtmp_session_t *s, uint64_t ts,
     ngx_int_t discont)
@@ -852,23 +878,23 @@ ngx_rtmp_hls_open_fragment(ngx_rtmp_session_t *s, uint64_t ts,
     ngx_rtmp_hls_app_conf_t  *hacf;
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
-
+    // 该ts文件已经被打开
     if (ctx->opened) {
         return NGX_OK;
     }
 
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
-
+    // 目录
     if (ngx_rtmp_hls_ensure_directory(s, &hacf->path) != NGX_OK) {
         return NGX_ERROR;
     }
-
+    // 加密 
     if (hacf->keys &&
         ngx_rtmp_hls_ensure_directory(s, &hacf->key_path) != NGX_OK)
     {
         return NGX_ERROR;
     }
-
+    // 获取将要生成的这一个分片的name
     id = ngx_rtmp_hls_get_fragment_id(s, ts);
 
     if (hacf->granularity) {
@@ -927,7 +953,7 @@ ngx_rtmp_hls_open_fragment(ngx_rtmp_session_t *s, uint64_t ts,
         }
     }
 
-    ngx_log_debug6(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                    "hls: open fragment file='%s', keyfile='%s', "
                    "frag=%uL, n=%ui, time=%uL, discont=%i",
                    ctx->stream.data,
@@ -961,7 +987,7 @@ ngx_rtmp_hls_open_fragment(ngx_rtmp_session_t *s, uint64_t ts,
     f->id = id;
     f->key_id = ctx->key_id;
 
-    ctx->frag_ts = ts;
+    ctx->frag_ts = ts;  //记录当前分片第一次open时候的，起始时间戳
 
     /* start fragment with audio to make iPhone happy */
 
@@ -970,7 +996,7 @@ ngx_rtmp_hls_open_fragment(ngx_rtmp_session_t *s, uint64_t ts,
     return NGX_OK;
 }
 
-
+// 在原来分片序号的基础上，继续新的切片逻辑
 static void
 ngx_rtmp_hls_restore_stream(ngx_rtmp_session_t *s)
 {
@@ -1150,7 +1176,7 @@ ngx_rtmp_hls_restore_stream(ngx_rtmp_session_t *s)
 
                 ngx_rtmp_hls_next_frag(s);
 
-                ngx_log_debug6(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+                ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                                "hls: restore fragment '%*s' id=%uL, "
                                "duration=%.3f, frag=%uL, nfrags=%ui",
                                (size_t) (last - p), p, f->id, f->duration,
@@ -1269,7 +1295,7 @@ ngx_rtmp_hls_ensure_directory(ngx_rtmp_session_t *s, ngx_str_t *path)
     return NGX_OK;
 }
 
-
+// 初始化ngx_rtmp_hls_ctx_t结构，并选择从切片序号的起始分片
 static ngx_int_t
 ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 {
@@ -1291,7 +1317,7 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
         goto next;
     }
 
-    ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                    "hls: publish: name='%s' type='%s'",
                    v->name, v->type);
 
@@ -1465,6 +1491,8 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
                    &ctx->playlist, &ctx->playlist_bak,
                    &ctx->stream, &ctx->keyfile);
 
+    // In this mode HLS sequence number is started from 
+    // where it stopped last time
     if (hacf->continuous) {
         ngx_rtmp_hls_restore_stream(s);
     }
@@ -1473,7 +1501,7 @@ next:
     return next_publish(s, v);
 }
 
-
+// 这个函数是在流被关闭的时候调用，并且需要关闭最后的分片，并更新m3u8列表
 static ngx_int_t
 ngx_rtmp_hls_close_stream(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v)
 {
@@ -1488,8 +1516,8 @@ ngx_rtmp_hls_close_stream(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v)
         goto next;
     }
 
-    ngx_log_debug0(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "hls: close stream");
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+                   "hls: name = %s, close stream",(u_char*)ctx->name.data);
 
     ngx_rtmp_hls_close_fragment(s);
 
@@ -1497,7 +1525,10 @@ next:
     return next_close_stream(s, v);
 }
 
-
+// 解析aac header，获取三个adts的参数：
+// objtype:   profile
+// srindex:   sampling_frequency_index
+// chconf:    channel_configuration
 static ngx_int_t
 ngx_rtmp_hls_parse_aac_header(ngx_rtmp_session_t *s, ngx_uint_t *objtype,
     ngx_uint_t *srindex, ngx_uint_t *chconf)
@@ -1523,7 +1554,8 @@ ngx_rtmp_hls_parse_aac_header(ngx_rtmp_session_t *s, ngx_uint_t *objtype,
     if (ngx_rtmp_hls_copy(s, &b1, &p, 1, &cl) != NGX_OK) {
         return NGX_ERROR;
     }
-
+    
+    // profile
     *objtype = b0 >> 3;
     if (*objtype == 0 || *objtype == 0x1f) {
         ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
@@ -1540,7 +1572,8 @@ ngx_rtmp_hls_parse_aac_header(ngx_rtmp_session_t *s, ngx_uint_t *objtype,
 
         *objtype = 2;
     }
-
+    
+    // sampling_frequency_index
     *srindex = ((b0 << 1) & 0x0f) | ((b1 & 0x80) >> 7);
     if (*srindex == 0x0f) {
         ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
@@ -1548,16 +1581,18 @@ ngx_rtmp_hls_parse_aac_header(ngx_rtmp_session_t *s, ngx_uint_t *objtype,
         return NGX_ERROR;
     }
 
+    // channel_configuration: 表示声道数 
     *chconf = (b1 >> 3) & 0x0f;
 
-    ngx_log_debug3(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "hls: aac object_type:%ui, sample_rate_index:%ui, "
-                   "channel_config:%ui", *objtype, *srindex, *chconf);
+    // ngx_log_debug3(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    //                "hls: aac object_type:%ui, sample_rate_index:%ui, "
+    //                "channel_config:%ui", *objtype, *srindex, *chconf);
 
     return NGX_OK;
 }
 
-
+// ts:时间戳,单位ms
+// boundary：如果没有视频为true,如果有视频为 false
 static void
 ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
     ngx_int_t boundary, ngx_uint_t flush_rate)
@@ -1573,16 +1608,18 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
     f = NULL;
-    force = 0;
+    force = 0;  // 这个地方会在默认情况下对ts文件进行强制切片
     discont = 1;
 
     if (ctx->opened) {
         f = ngx_rtmp_hls_get_frag(s, ctx->nfrags);
         d = (int64_t) (ts - ctx->frag_ts);
 
+        //在这种情况下，强制生成新的分片
         if (d > (int64_t) hacf->max_fraglen * 90 || d < -90000) {
             ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
-                          "hls: force fragment split: %.3f sec, ", d / 90000.);
+                          "hls: name = %s force fragment split: %.3f sec, ",
+                          (u_char*)ctx->name.data, d / 90000.);
             force = 1;
 
         } else {
@@ -1614,7 +1651,8 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
 
             break;
     }
-
+    // 如果触发了强制更换分片的逻辑或者超过了配置文件中的分片设定值，则关闭之前的分片，
+    // 重新开始新的分片
     if (boundary || force) {
         ngx_rtmp_hls_close_fragment(s);
         ngx_rtmp_hls_open_fragment(s, ts, discont);
@@ -1658,8 +1696,8 @@ ngx_rtmp_hls_flush_audio(ngx_rtmp_session_t *s)
     frame.pid = 0x101;
     frame.sid = 0xc0;
 
-    ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "hls: flush audio pts=%uL", frame.pts);
+    // ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    //                "hls: flush audio pts=%uL", frame.pts);
 
     rc = ngx_rtmp_mpegts_write_frame(&ctx->file, &frame, b);
 
@@ -1706,7 +1744,7 @@ ngx_rtmp_hls_audio(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     {
         return NGX_OK;
     }
-
+    // 获取aframe ngx_buf_t，如果没有重新申请
     b = ctx->aframe;
 
     if (b == NULL) {
@@ -1726,10 +1764,11 @@ ngx_rtmp_hls_audio(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         b->end = b->start + hacf->audio_buffer_size;
         b->pos = b->last = b->start;
     }
-
+    // 7为adts头大小
     size = h->mlen - 2 + 7;
     pts = (uint64_t) h->timestamp * 90;
-
+    
+    // 这个audio tag过大 
     if (b->start + size > b->end) {
         ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                       "hls: too big audio frame");
@@ -1741,15 +1780,15 @@ ngx_rtmp_hls_audio(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
      * there's no video at all, otherwise
      * do it in video handler
      */
-
+    // 判断是否有video？
     ngx_rtmp_hls_update_fragment(s, pts, codec_ctx->avc_header == NULL, 2);
 
     if (b->last + size > b->end) {
         ngx_rtmp_hls_flush_audio(s);
     }
 
-    ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "hls: audio pts=%uL", pts);
+    // ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    //                "hls: audio pts=%uL", pts);
 
     if (b->last + 7 > b->end) {
         ngx_log_debug0(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
@@ -1813,9 +1852,9 @@ ngx_rtmp_hls_audio(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                                  codec_ctx->sample_rate;
     dpts = (int64_t) (est_pts - pts);
 
-    ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "hls: audio sync dpts=%L (%.5fs)",
-                   dpts, dpts / 90000.);
+    // ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    //                "hls: audio sync dpts=%L (%.5fs)",
+    //                dpts, dpts / 90000.);
 
     if (dpts <= (int64_t) hacf->sync * 90 &&
         dpts >= (int64_t) hacf->sync * -90)
@@ -1835,6 +1874,57 @@ ngx_rtmp_hls_audio(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     return NGX_OK;
 }
 
+#if (NGX_DEBUG)
+static void
+ngx_rtmp_hls_dump_header(ngx_rtmp_session_t *s, const char *type,
+    ngx_chain_t *in)
+{
+    ngx_rtmp_hls_ctx_t   *ctx;
+    u_char buf[256], *p, *pp;
+    u_char hex[] = "0123456789abcdef";
+
+    ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
+    
+    if (ctx == NULL)
+    {
+        return;
+    }
+
+    for (pp = buf, p = in->buf->pos;
+         p < in->buf->last && pp < buf + sizeof(buf) - 1;
+         ++p)
+    {
+        *pp++ = hex[*p >> 4];
+        *pp++ = hex[*p & 0x0f];
+    }
+
+    *pp = 0;
+
+    ngx_log_debug3(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+                   "hls: name = %s codec type %s header %s", (u_char*)ctx->name.data ,type, buf);
+}
+
+// static void
+// ngx_rtmp_hls_dump_sps_pps(ngx_rtmp_session_t *s, const char *type,
+//     ngx_buf_t *in)
+// {
+//     u_char buf[256], *p, *pp;
+//     u_char hex[] = "0123456789abcdef";
+
+//     for (pp = buf, p = in->pos;
+//          p < in->last && pp < buf + sizeof(buf) - 1;
+//          ++p)
+//     {
+//         *pp++ = hex[*p >> 4];
+//         *pp++ = hex[*p & 0x0f];
+//     }
+
+//     *pp = 0;
+
+//     ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+//                    "hls: codec type %s sps pps %s", type, buf);
+// }
+#endif
 
 static ngx_int_t
 ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
@@ -1887,13 +1977,13 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         return NGX_ERROR;
     }
 
-    /* proceed only with PICT */
+    /* proceed only with PICT --> One or more NALUs */
 
     if (htype != 1) {
         return NGX_OK;
     }
 
-    /* 3 bytes: decoder delay */
+    /* 3 bytes: decoder delay --> CompositionTime */
 
     if (ngx_rtmp_hls_copy(s, &cts, &p, 3, &in) != NGX_OK) {
         return NGX_ERROR;
@@ -1931,10 +2021,6 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
         nal_type = src_nal_type & 0x1f;
 
-        ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                       "hls: h264 NAL type=%ui, len=%uD",
-                       (ngx_uint_t) nal_type, len);
-
         if (nal_type >= 7 && nal_type <= 9) {
             if (ngx_rtmp_hls_copy(s, NULL, &p, len - 1, &in) != NGX_OK) {
                 return NGX_ERROR;
@@ -1969,7 +2055,9 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                     ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                                   "hls: error appenging SPS/PPS NALs");
                 }
+
                 sps_pps_sent = 1;
+                
                 break;
         }
 
@@ -2006,7 +2094,7 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
         out.last += (len - 1);
     }
-
+  
     ngx_memzero(&frame, sizeof(frame));
 
     frame.cc = ctx->video_cc;
@@ -2032,8 +2120,8 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         return NGX_OK;
     }
 
-    ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "hls: video pts=%uL, dts=%uL", frame.pts, frame.dts);
+    // ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+    //                "hls: video pts=%uL, dts=%uL", frame.pts, frame.dts);
 
     if (ngx_rtmp_mpegts_write_frame(&ctx->file, &frame, &out) != NGX_OK) {
         ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
