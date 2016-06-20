@@ -1,5 +1,5 @@
 #!/bin/bash
-./configure --prefix=/home/liwenfeng/src/opensource/nginx-learing/nginx-1.9.9/run \
+./configure --prefix=/home/liwenfeng/src/opensource/nginx-learning/nginx-1.9.9/run \
     --conf-path=/etc/nginx/nginx.conf \
     --sbin-path=/usr/sbin/nginx \
     --error-log-path=/var/log/nginx/error.log \

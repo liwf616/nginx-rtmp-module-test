@@ -251,16 +251,16 @@ ngx_rtmp_codec_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         if (ctx->video_codec_id == NGX_RTMP_VIDEO_H264) {
             header = &ctx->avc_header;
 
-            ngx_uint_t width = ctx->width;
-            ngx_uint_t height = ctx->height;
+            /* ngx_uint_t width = ctx->width; */
+            /* ngx_uint_t height = ctx->height; */
             ngx_rtmp_codec_parse_avc_header(s, in);
-            if (width != ctx->width || height != ctx->height)
-            {
-                ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
-                                "codec: avc header is changed!!!!");
-                // 在这种情况下，需要重新断开连接，然后让publisher重新publish
-                // ngx_rtmp_finalize_session(s);
-            }
+            /* if (width != ctx->width || height != ctx->height) */
+            /* { */
+                /* ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, */
+                                /* "codec: avc header is changed!!!!"); */
+                /* // 在这种情况下，需要重新断开连接，然后让publisher重新publish */
+                /* // ngx_rtmp_finalize_session(s); */
+            /* } */
         }
     }
 

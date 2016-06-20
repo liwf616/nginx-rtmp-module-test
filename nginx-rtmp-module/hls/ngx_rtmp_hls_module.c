@@ -60,19 +60,19 @@ typedef struct {
 
     ngx_str_t                           playlist;           //完整的m3u8名称"
                                                             //Users/liwf/Movies/hls/genshuixue/index.m3u8
-    ngx_str_t                           playlist_bak;
+    ngx_str_t                           playlist_bak;       //Users/liwf/Movies/hls/genshuixue/index.m3u8.bak
     ngx_str_t                           var_playlist;
     ngx_str_t                           var_playlist_bak;
-    ngx_str_t                           stream;             // /Users/liwf/Movies/hls/genshuixue/
+    ngx_str_t                           stream;             // /Users/liwf/Movies/hls/genshuixue-
     ngx_str_t                           keyfile;
-    ngx_str_t                           name;               //genshuixue
+    ngx_str_t                           name;               //genshuixue stream name
     u_char                              key[16];
 
     uint64_t                            frag;               //最小的frag的index
     uint64_t                            frag_ts;
     uint64_t                            key_id;
     ngx_uint_t                          nfrags;             //该stream已经切出的fragments num
-    ngx_rtmp_hls_frag_t                *frags; /* circular 2 * winfrags + 1 */
+    ngx_rtmp_hls_frag_t                *frags;              /* circular 2 * winfrags + 1 */
 
     ngx_uint_t                          audio_cc;
     ngx_uint_t                          video_cc;
@@ -1295,7 +1295,7 @@ ngx_rtmp_hls_ensure_directory(ngx_rtmp_session_t *s, ngx_str_t *path)
     return NGX_OK;
 }
 
-// 初始化ngx_rtmp_hls_ctx_t结构，并选择从切片序号的起始分片
+//(1) 初始化ngx_rtmp_hls_ctx_t结构，并选择从切片序号的起始分片
 static ngx_int_t
 ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 {
@@ -1321,6 +1321,7 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
                    "hls: publish: name='%s' type='%s'",
                    v->name, v->type);
 
+    //init and set ctx
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
 
     if (ctx == NULL) {
@@ -1352,6 +1353,7 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
         }
     }
 
+    //stream name
     if (ngx_strstr(v->name, "..")) {
         ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                       "hls: bad stream name: '%s'", v->name);
@@ -1491,7 +1493,7 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
                    &ctx->playlist, &ctx->playlist_bak,
                    &ctx->stream, &ctx->keyfile);
 
-    // In this mode HLS sequence number is started from 
+    // In this mode HLS sequence number is started from
     // where it stopped last time
     if (hacf->continuous) {
         ngx_rtmp_hls_restore_stream(s);
@@ -1977,7 +1979,7 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         return NGX_ERROR;
     }
 
-    /* proceed only with PICT --> One or more NALUs */
+    /* proceed only with PICT --> One or more NALUs 1:AVC NALU */
 
     if (htype != 1) {
         return NGX_OK;

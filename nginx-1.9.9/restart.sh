@@ -1,6 +1,7 @@
 #!/bin/bash
+mkdir /var/run/nginx/
 nginx -V
 nginx -s stop
-nginx
+nohup nginx &
 
 echo "start nginx success!!"

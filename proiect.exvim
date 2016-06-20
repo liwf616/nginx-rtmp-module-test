@@ -12,7 +12,7 @@ project_name = 'proiect'
 
 -- File And Folder Filters:
 folder_filter_mode = exclude -- { include, exclude }
-folder_filter += echo-nginx-module,pcre-8.35,nginx-1.9.9/src/mail,nginx-1.9.9/src/misc,nginx-1.9.9/src/os,nginx-1.9.9/src/http,nginx-1.9.9,hello-world
+folder_filter += echo-nginx-module,pcre-8.35,nginx-1.9.9/src/mail,nginx-1.9.9/src/misc,nginx-1.9.9/src/os,nginx-1.9.9/src/http,hello-world
 file_filter += h,c
 file_ignore_pattern +=
 
